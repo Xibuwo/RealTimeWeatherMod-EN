@@ -12,7 +12,7 @@ using Bulbul;
 
 namespace ChillWithYou.EnvSync
 {
-    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.4.0")]
+    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.4.1")]
     public class ChillEnvPlugin : BaseUnityPlugin
     {
         internal static ChillEnvPlugin Instance;
@@ -48,7 +48,7 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo("【4.4.0】启动 - 环境与景色逻辑分离 (Night优先原则)");
+            Log.LogInfo("【4.4.1】启动 - 优化坏天气判定 (允许太阳雨/雪)");
 
             try
             {
@@ -527,10 +527,14 @@ namespace ChillWithYou.EnvSync
 
         private bool IsBadWeather(int code)
         {
-            // BadWeather 定义: [4, 7-31, 34-36]
+            // 排除项 (太阳雨/雪): 10(阵雨), 13(小雨), 21(阵雪), 22(小雪)
+            if (code == 10 || code == 13 || code == 21 || code == 22) return false;
+
+            // 原始 BadWeather 定义: [4, 7-31, 34-36]
             if (code == 4) return true;
             if (code >= 7 && code <= 31) return true;
             if (code >= 34 && code <= 36) return true;
+
             return false;
         }
 
