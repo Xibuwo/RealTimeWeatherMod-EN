@@ -12,7 +12,7 @@ using Bulbul;
 
 namespace ChillWithYou.EnvSync
 {
-    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.3.1")]
+    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.4.0")]
     public class ChillEnvPlugin : BaseUnityPlugin
     {
         internal static ChillEnvPlugin Instance;
@@ -48,7 +48,7 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo("【4.3.1】启动 - 彻底移除降水天气对Service的误调用");
+            Log.LogInfo("【4.4.0】启动 - 环境与景色逻辑分离 (Night优先原则)");
 
             try
             {
@@ -225,23 +225,6 @@ namespace ChillWithYou.EnvSync
         private static DateTime _lastFetchTime;
         private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(60);
 
-        private static readonly Dictionary<string, EnvironmentType> WeatherToEnvironment = new Dictionary<string, EnvironmentType>(StringComparer.OrdinalIgnoreCase)
-        {
-            {"Clear", EnvironmentType.Day},
-            {"Clouds", EnvironmentType.Cloudy},
-            {"Drizzle", EnvironmentType.LightRain},
-            {"Rain", EnvironmentType.HeavyRain},
-            {"Thunderstorm", EnvironmentType.ThunderRain},
-            {"Snow", EnvironmentType.Snow},
-            {"Mist", EnvironmentType.Cloudy},
-            {"Fog", EnvironmentType.Cloudy},
-            {"Haze", EnvironmentType.Cloudy},
-            {"Dust", EnvironmentType.Wind},
-            {"Sand", EnvironmentType.Wind},
-            {"Squall", EnvironmentType.ThunderRain},
-            {"Tornado", EnvironmentType.ThunderRain},
-        };
-
         public static WeatherInfo CachedWeather => _cachedWeather;
 
         public static IEnumerator FetchWeather(string apiKey, string location, bool force, Action<WeatherInfo> onComplete)
@@ -379,7 +362,7 @@ namespace ChillWithYou.EnvSync
             EnvironmentType.Day, EnvironmentType.Sunset, EnvironmentType.Night, EnvironmentType.Cloudy
         };
 
-        private static readonly EnvironmentType[] PrecipitationWeathers = new[]
+        private static readonly EnvironmentType[] SceneryWeathers = new[]
         {
             EnvironmentType.ThunderRain, EnvironmentType.HeavyRain, EnvironmentType.LightRain, EnvironmentType.Snow
         };
@@ -532,87 +515,37 @@ namespace ChillWithYou.EnvSync
             return false;
         }
 
-        private void ActivateEnvironment(EnvironmentType envType)
+        private void SimulateClick(EnvironmentType envType)
         {
             if (EnvRegistry.TryGet(envType, out var ctrl))
             {
-                if (!IsEnvironmentActive(envType))
-                {
-                    ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-                    // 【修复】移除这里的 CallServiceChangeWeather，改为在 ActivateEnvironmentWithMutex 中统一管理
-                }
+                ChillEnvPlugin.SimulateClickMainIcon(ctrl);
             }
         }
 
-        private void DeactivateEnvironment(EnvironmentType envType)
+        // --- 逻辑 Helper 方法 ---
+
+        private bool IsBadWeather(int code)
         {
-            if (EnvRegistry.TryGet(envType, out var ctrl))
-            {
-                if (IsEnvironmentActive(envType))
-                {
-                    ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-                }
-            }
+            // BadWeather 定义: [4, 7-31, 34-36]
+            if (code == 4) return true;
+            if (code >= 7 && code <= 31) return true;
+            if (code >= 34 && code <= 36) return true;
+            return false;
         }
 
-        private void ForceActivateEnvironment(EnvironmentType envType)
+        private EnvironmentType? GetSceneryType(int code)
         {
-            if (EnvRegistry.TryGet(envType, out var ctrl))
-            {
-                if (!IsEnvironmentActive(envType))
-                {
-                    ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-                }
-                // 【修复】移除 CallServiceChangeWeather
-            }
-        }
+            // Snow: 20-25
+            if (code >= 20 && code <= 25) return EnvironmentType.Snow;
+            // ThunderRain: 11, 12, 16-18
+            if (code == 11 || code == 12 || (code >= 16 && code <= 18)) return EnvironmentType.ThunderRain;
+            // HeavyRain: 10, 14, 15
+            if (code == 10 || code == 14 || code == 15) return EnvironmentType.HeavyRain;
+            // LightRain: 13, 19
+            if (code == 13 || code == 19) return EnvironmentType.LightRain;
 
-        private void ActivateEnvironmentWithMutex(EnvironmentType target, bool force)
-        {
-            if (!force && IsEnvironmentActive(target)) return;
-
-            bool isBaseEnv = Array.IndexOf(BaseEnvironments, target) >= 0;
-            bool isPrecipitation = Array.IndexOf(PrecipitationWeathers, target) >= 0;
-
-            if (isBaseEnv)
-            {
-                foreach (var env in BaseEnvironments)
-                    if (env != target) DeactivateEnvironment(env);
-            }
-
-            if (isPrecipitation)
-            {
-                foreach (var env in PrecipitationWeathers)
-                    if (env != target) DeactivateEnvironment(env);
-            }
-
-            if (force)
-            {
-                ForceActivateEnvironment(target);
-                ChillEnvPlugin.Log?.LogInfo($"[强制决策] 刷新至 {target}");
-            }
-            else
-            {
-                ActivateEnvironment(target);
-                ChillEnvPlugin.Log?.LogInfo($"[决策] 切换至 {target}");
-            }
-
-            // 【关键修复】只有基础环境才允许调用 Service，防止 Precipitation (Snow/Rain) 覆盖掉背景
-            if (isBaseEnv)
-            {
-                ChillEnvPlugin.CallServiceChangeWeather(target);
-            }
-        }
-
-        private void ClearAllWeatherEffects()
-        {
-            foreach (var env in PrecipitationWeathers)
-            {
-                if (IsEnvironmentActive(env))
-                {
-                    DeactivateEnvironment(env);
-                }
-            }
+            return null;
         }
 
         private EnvironmentType GetTimeBasedEnvironment()
@@ -626,65 +559,123 @@ namespace ChillWithYou.EnvSync
             TimeSpan sunsetStart = sunset.Subtract(TimeSpan.FromMinutes(30));
             TimeSpan sunsetEnd = sunset.Add(TimeSpan.FromMinutes(30));
 
-            if (currentTime >= sunrise && currentTime < sunsetStart) return EnvironmentType.Day;
+            // Night: 晚于 SunsetEnd 或 早于 Sunrise
+            if (currentTime >= sunsetEnd || currentTime < sunrise) return EnvironmentType.Night;
+            // Sunset: 在 SunsetStart 和 SunsetEnd 之间
             else if (currentTime >= sunsetStart && currentTime < sunsetEnd) return EnvironmentType.Sunset;
-            else return EnvironmentType.Night;
+            // Day: 其他
+            else return EnvironmentType.Day;
+        }
+
+        // --- 执行逻辑 ---
+
+        // 应用基础环境 (Day/Sunset/Night/Cloudy)
+        // 规则: 互斥，且必须调用 Service
+        private void ApplyBaseEnvironment(EnvironmentType target, bool force)
+        {
+            // 只有当目标和当前不一致，或者强制刷新时，才操作
+            if (!force && IsEnvironmentActive(target)) return;
+
+            // 关闭其他所有基础环境
+            foreach (var env in BaseEnvironments)
+            {
+                if (env != target && IsEnvironmentActive(env))
+                {
+                    SimulateClick(env); // 关掉旧的
+                }
+            }
+
+            // 开启新的
+            if (!IsEnvironmentActive(target))
+            {
+                SimulateClick(target); // 开启新的
+            }
+            else if (force)
+            {
+                // 已经是开启状态，但在强制模式下，可能需要修复画面
+                // 但对于 BaseEnv，通常不需要额外操作，因为 CallServiceChangeWeather 会处理
+            }
+
+            // 关键：通知 Service 切换背景
+            ChillEnvPlugin.CallServiceChangeWeather(target);
+            ChillEnvPlugin.Log?.LogInfo($"[环境] 切换至: {target}");
+        }
+
+        // 应用景色 (Rain/Snow)
+        // 规则: 互斥，但【绝对不调用】Service
+        private void ApplyScenery(EnvironmentType? target, bool force)
+        {
+            // 遍历所有可能的景色
+            foreach (var env in SceneryWeathers)
+            {
+                bool shouldBeActive = (target.HasValue && target.Value == env);
+                bool isActive = IsEnvironmentActive(env);
+
+                if (shouldBeActive)
+                {
+                    // 如果应该开，但没开 -> 点开
+                    if (!isActive)
+                    {
+                        SimulateClick(env);
+                        ChillEnvPlugin.Log?.LogInfo($"[景色] 开启: {env}");
+                    }
+                    // 如果应该开，且开了，但在强制模式 -> 啥也不做 (避免 Toggle Off)
+                    // 景色通常不需要强制唤醒画面，只要 UI 亮了，粒子就会出来
+                }
+                else
+                {
+                    // 如果不该开，但开了 -> 关掉
+                    if (isActive)
+                    {
+                        SimulateClick(env); // 关掉
+                        // ChillEnvPlugin.Log?.LogInfo($"[景色] 关闭: {env}");
+                    }
+                }
+            }
         }
 
         private void ApplyEnvironment(WeatherInfo weather, bool force)
         {
             if (force || _lastAppliedEnv == null)
             {
-                ChillEnvPlugin.Log?.LogInfo($"[决策] 天气:{weather.Text}(Code:{weather.Code}) 温度:{weather.Temperature}°C");
+                ChillEnvPlugin.Log?.LogInfo($"[决策] 天气:{weather.Text}(Code:{weather.Code})");
             }
 
-            EnvironmentType timeEnv = GetTimeBasedEnvironment();
-            int code = weather.Code;
+            // Step 1: 计算时间基准环境
+            EnvironmentType baseEnv = GetTimeBasedEnvironment();
+            EnvironmentType finalEnv = baseEnv;
 
-            if (code >= 0 && code <= 3)
+            // Step 2: 天气覆盖 (Bad Weather Override)
+            // 规则: 如果是坏天气，且当前不是夜晚，强制覆盖为 Cloudy
+            if (IsBadWeather(weather.Code))
             {
-                ClearAllWeatherEffects();
-                ActivateEnvironmentWithMutex(timeEnv, force);
-            }
-            else if (code >= 4 && code <= 9)
-            {
-                ClearAllWeatherEffects();
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
-            }
-            else if (code >= 10 && code <= 12)
-            {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
-                ActivateEnvironmentWithMutex(EnvironmentType.LightRain, force);
-            }
-            else if (code >= 13 && code <= 14)
-            {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
-                ActivateEnvironmentWithMutex(EnvironmentType.HeavyRain, force);
-            }
-            else if (code >= 15 && code <= 18)
-            {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
-                ActivateEnvironmentWithMutex(EnvironmentType.ThunderRain, force);
-            }
-            else if (code >= 21 && code <= 25)
-            {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
-                ActivateEnvironmentWithMutex(EnvironmentType.Snow, force);
-            }
-            else
-            {
-                ClearAllWeatherEffects();
-                ActivateEnvironmentWithMutex(timeEnv, force);
+                if (baseEnv != EnvironmentType.Night)
+                {
+                    finalEnv = EnvironmentType.Cloudy;
+                    // ChillEnvPlugin.Log?.LogInfo($"[覆盖] 坏天气检测，环境重定向至 Cloudy");
+                }
+                else
+                {
+                    // ChillEnvPlugin.Log?.LogInfo($"[覆盖] 坏天气检测，但由于是夜晚，保持 Night");
+                }
             }
 
-            _lastAppliedEnv = timeEnv;
+            // Step 3: 景色判断 (Scenery)
+            EnvironmentType? targetScenery = GetSceneryType(weather.Code);
+
+            // 执行
+            ApplyBaseEnvironment(finalEnv, force);
+            ApplyScenery(targetScenery, force);
+
+            _lastAppliedEnv = finalEnv;
         }
 
         private void ApplyTimeBasedEnvironment(bool force)
         {
+            // 无API数据时，只按时间走，且没有景色
             EnvironmentType targetEnv = GetTimeBasedEnvironment();
-            ClearAllWeatherEffects();
-            ActivateEnvironmentWithMutex(targetEnv, force);
+            ApplyBaseEnvironment(targetEnv, force);
+            ApplyScenery(null, force); // 关闭所有雨雪
         }
     }
 
