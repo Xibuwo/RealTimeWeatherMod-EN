@@ -1,366 +1,461 @@
-﻿using BepInEx;
-using BepInEx.Logging;
-using Bulbul;
-using HarmonyLib;
-using System;
-using System.Collections.Concurrent;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
-using System.Net.Http;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
+using MelonLoader;
 using UnityEngine;
+using UnityEngine.Networking;
+using Bulbul;
 
-namespace ChillEnvMod
+namespace ChillEnvSync
 {
-    [BepInPlugin("com.chillenv.plugin", "ChillEnv", "1.0.0")]
-    public class ChillEnvPlugin : BaseUnityPlugin
+    public class ChillEnvSync : MelonMod
     {
-        internal static ManualLogSource Log;
-        internal static FacilityEnviroment Facility;
-        private static Harmony _harmony;
+        // ========== 配置 ==========
+        private MelonPreferences_Category _configCategory;
+        private MelonPreferences_Entry<bool> _enableWeatherSync;
+        private MelonPreferences_Entry<string> _cityName;
+        private MelonPreferences_Entry<string> _apiKey;
+        private MelonPreferences_Entry<int> _syncIntervalMinutes;
 
-        private static readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
+        // ========== 状态 ==========
+        private float _lastSyncTime = -9999f;
+        private WindowViewService _windowViewService;
+        private bool _isInitialized = false;
 
-        private void Awake()
+        // ========== 互斥组定义 ==========
+        private static readonly HashSet<WindowViewType> BaseTimeWeather = new HashSet<WindowViewType>
         {
-            Log = Logger;
-            Log.LogInfo("[ChillEnv] 插件加载中...");
+            WindowViewType.Day,
+            WindowViewType.Sunset,
+            WindowViewType.Night,
+            WindowViewType.Cloudy
+        };
 
-            _harmony = new Harmony("com.chillenv.plugin");
-            _harmony.PatchAll();
-
-            Log.LogInfo("[ChillEnv] Harmony 补丁已应用");
-        }
-
-        private void Start()
-        {
-            AutoEnvRunner.StartLoop();
-        }
-
-        private void Update()
-        {
-            while (_mainThreadQueue.TryDequeue(out var action))
-            {
-                try { action?.Invoke(); }
-                catch (Exception ex) { Log?.LogError("[MainThread] 执行队列操作失败: " + ex.Message); }
-            }
-        }
-
-        internal static void EnqueueOnMainThread(Action action)
-        {
-            if (action != null) _mainThreadQueue.Enqueue(action);
-        }
-    }
-
-    // ============ 解锁所有窗景 ============
-    [HarmonyPatch(typeof(WindowViewData), "IsUnlocked", MethodType.Getter)]
-    internal static class WindowViewUnlockPatch
-    {
-        static void Postfix(ref bool __result)
-        {
-            __result = true;
-        }
-    }
-
-    // ============ 捕获 FacilityEnviroment 实例 ============
-    [HarmonyPatch(typeof(FacilityEnviroment), "Setup")]
-    internal static class FacilityEnviromentSetupPatch
-    {
-        static void Postfix(FacilityEnviroment __instance)
-        {
-            ChillEnvPlugin.Facility = __instance;
-            ChillEnvPlugin.Log?.LogInfo("[AutoEnv] 捕获 FacilityEnviroment 实例");
-        }
-    }
-
-    // ============ 主运行器 ============
-    internal static class AutoEnvRunner
-    {
-        private const string API_URL =
-            "https://api.open-meteo.com/v1/forecast?latitude=31.23&longitude=121.47&current=weather_code,is_day&timezone=auto";
-
-        private const int CHECK_INTERVAL_SECONDS = 300;
-
-        private static readonly WindowViewType[] PrecipitationViews =
+        private static readonly HashSet<WindowViewType> PrecipitationWeather = new HashSet<WindowViewType>
         {
             WindowViewType.LightRain,
             WindowViewType.HeavyRain,
             WindowViewType.ThunderRain
         };
 
-        public static void StartLoop()
+        // ========== 初始化 ==========
+        public override void OnInitializeMelon()
         {
-            ChillEnvPlugin.Log?.LogInfo("[AutoEnv] 等待游戏初始化...");
-            Task.Run(async () =>
-            {
-                while (ChillEnvPlugin.Facility == null)
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(1));
-                }
+            _configCategory = MelonPreferences.CreateCategory("ChillEnvSync");
+            _enableWeatherSync = _configCategory.CreateEntry("EnableWeatherSync", true, "启用天气同步");
+            _cityName = _configCategory.CreateEntry("CityName", "北京", "城市名称");
+            _apiKey = _configCategory.CreateEntry("ApiKey", "S-xxxxxxxx", "心知天气API密钥");
+            _syncIntervalMinutes = _configCategory.CreateEntry("SyncIntervalMinutes", 30, "同步间隔(分钟)");
 
-                ChillEnvPlugin.Log?.LogInfo("[AutoEnv] 开始天气同步循环");
-
-                while (true)
-                {
-                    try
-                    {
-                        await FetchAndApplyWeather();
-                    }
-                    catch (Exception ex)
-                    {
-                        ChillEnvPlugin.Log?.LogError($"[AutoEnv] 天气同步出错: {ex.Message}");
-                    }
-
-                    await Task.Delay(TimeSpan.FromSeconds(CHECK_INTERVAL_SECONDS));
-                }
-            });
+            MelonLogger.Msg("Chill Env Sync 已加载");
         }
 
-        private static async Task FetchAndApplyWeather()
+        public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
-            ChillEnvPlugin.Log?.LogInfo("[AutoEnv] 正在获取天气数据...");
+            _isInitialized = false;
+            _windowViewService = null;
+            MelonLogger.Msg($"场景加载: {sceneName}");
+        }
 
-            using (var client = new HttpClient())
+        public override void OnUpdate()
+        {
+            if (!_enableWeatherSync.Value) return;
+
+            // 尝试初始化
+            if (!_isInitialized)
             {
-                client.Timeout = TimeSpan.FromSeconds(10);
-                var response = await client.GetStringAsync(API_URL);
+                TryInitialize();
+                return;
+            }
 
-                ChillEnvPlugin.Log?.LogInfo($"[AutoEnv] API 返回: {response.Substring(0, Math.Min(200, response.Length))}...");
-
-                // 修正正则：JSON 中的引号不需要转义
-                int weatherCode = TryExtractInt(response, "\"weather_code\"\\s*:\\s*(?<v>-?\\d+)");
-                int isDay = TryExtractInt(response, "\"is_day\"\\s*:\\s*(?<v>-?\\d+)");
-
-                ChillEnvPlugin.Log?.LogInfo($"[AutoEnv] 解析结果: 天气代码={weatherCode}, 白天={isDay}");
-
-                ChillEnvPlugin.EnqueueOnMainThread(() =>
-                {
-                    ApplyWeather(weatherCode, isDay == 1);
-                });
+            // 定时同步
+            float interval = _syncIntervalMinutes.Value * 60f;
+            if (Time.time - _lastSyncTime >= interval)
+            {
+                _lastSyncTime = Time.time;
+                MelonCoroutines.Start(FetchAndApplyWeather());
             }
         }
 
-        private static int TryExtractInt(string text, string pattern)
+        private void TryInitialize()
         {
             try
             {
-                var m = Regex.Match(text, pattern);
-                if (m.Success)
+                _windowViewService = UnityEngine.Object.FindObjectOfType<WindowViewService>();
+                if (_windowViewService != null)
                 {
-                    int v;
-                    if (int.TryParse(m.Groups["v"].Value, out v))
-                    {
-                        return v;
-                    }
+                    _isInitialized = true;
+                    MelonLogger.Msg("WindowViewService 已找到，初始化完成");
+
+                    // 立即执行一次同步
+                    _lastSyncTime = Time.time;
+                    MelonCoroutines.Start(FetchAndApplyWeather());
                 }
             }
             catch (Exception ex)
             {
-                ChillEnvPlugin.Log?.LogError($"[AutoEnv] 正则解析失败: {ex.Message}");
+                MelonLogger.Warning($"初始化失败: {ex.Message}");
             }
-            return -1; // 返回 -1 表示解析失败，而不是 0（0 是有效的天气代码）
         }
 
-        private static bool IsWindowActive(WindowViewType type)
+        // ========== 天气获取 ==========
+        private IEnumerator FetchAndApplyWeather()
         {
-            var dic = SaveDataManager.Instance?.WindowViewDic;
-            if (dic == null) return false;
+            string city = _cityName.Value;
+            string apiKey = _apiKey.Value;
 
-            WindowViewData data;
-            return dic.TryGetValue(type, out data) && data.IsActive;
-        }
+            MelonLogger.Msg($"请求天气: {city}");
 
-        private static void LogCurrentState()
-        {
-            var activePrecip = new List<string>();
-            foreach (var t in PrecipitationViews)
+            string url = $"https://api.seniverse.com/v3/weather/now.json?key={apiKey}&location={UnityWebRequest.EscapeURL(city)}&language=zh-Hans&unit=c";
+
+            using (UnityWebRequest request = UnityWebRequest.Get(url))
             {
-                if (IsWindowActive(t))
-                    activePrecip.Add(t.ToString());
-            }
+                yield return request.SendWebRequest();
 
-            var timeState = "未知";
-            if (IsWindowActive(WindowViewType.Day)) timeState = "Day";
-            else if (IsWindowActive(WindowViewType.Sunset)) timeState = "Sunset";
-            else if (IsWindowActive(WindowViewType.Night)) timeState = "Night";
-            else if (IsWindowActive(WindowViewType.Cloudy)) timeState = "Cloudy";
-
-            bool snowActive = IsWindowActive(WindowViewType.Snow);
-
-            ChillEnvPlugin.Log?.LogInfo($"[状态] 时间={timeState}, 降水={(activePrecip.Count == 0 ? "无" : string.Join(", ", activePrecip))}, 雪景={snowActive}");
-        }
-
-        private static void ClearPrecipitation(FacilityEnviroment fac)
-        {
-            foreach (var w in PrecipitationViews)
-            {
-                if (IsWindowActive(w))
+                if (request.result != UnityWebRequest.Result.Success)
                 {
-                    ChillEnvPlugin.Log?.LogInfo($"[操作] 关闭降水: {w}");
-                    fac.ChangeWindowView(ChangeType.Deactivate, w);
+                    MelonLogger.Error($"天气请求失败: {request.error}");
+                    yield break;
+                }
+
+                string json = request.downloadHandler.text;
+                MelonLogger.Msg($"天气API返回: {json}");
+
+                // 手动解析JSON
+                var weatherData = ParseWeatherJson(json);
+                if (weatherData.HasValue)
+                {
+                    var data = weatherData.Value;
+                    MelonLogger.Msg($"天气解析成功: {data.Text}, {data.Temperature}°C, Code={data.Code}");
+
+                    // 判断时段
+                    bool isDay = IsDaytime();
+                    string timeOfDay = isDay ? "Day" : "Night";
+                    MelonLogger.Msg($"[天气决策] {data.Text} + 当前时间 -> {timeOfDay}");
+
+                    // 应用天气
+                    ApplyWeather(data.Code, isDay);
+                }
+                else
+                {
+                    MelonLogger.Error("天气解析失败");
                 }
             }
         }
 
-        private static void SetPrecipitation(FacilityEnviroment fac, WindowViewType target)
+        private struct WeatherData
         {
-            foreach (var w in PrecipitationViews)
+            public string Text;
+            public string Code;
+            public string Temperature;
+        }
+
+        private WeatherData? ParseWeatherJson(string json)
+        {
+            try
             {
-                if (w != target && IsWindowActive(w))
+                // 使用正则提取
+                var textMatch = Regex.Match(json, "\"text\"\\s*:\\s*\"([^\"]+)\"");
+                var codeMatch = Regex.Match(json, "\"code\"\\s*:\\s*\"([^\"]+)\"");
+                var tempMatch = Regex.Match(json, "\"temperature\"\\s*:\\s*\"([^\"]+)\"");
+
+                if (textMatch.Success && codeMatch.Success && tempMatch.Success)
                 {
-                    ChillEnvPlugin.Log?.LogInfo($"[操作] 关闭其他降水: {w}");
-                    fac.ChangeWindowView(ChangeType.Deactivate, w);
+                    return new WeatherData
+                    {
+                        Text = textMatch.Groups[1].Value,
+                        Code = codeMatch.Groups[1].Value,
+                        Temperature = tempMatch.Groups[1].Value
+                    };
                 }
             }
-
-            if (!IsWindowActive(target))
+            catch (Exception ex)
             {
-                ChillEnvPlugin.Log?.LogInfo($"[操作] 激活降水: {target}");
-                fac.ChangeWindowView(ChangeType.Activate, target);
+                MelonLogger.Error($"JSON解析异常: {ex.Message}");
             }
+            return null;
         }
 
-        private static void SetBaseTime(FacilityEnviroment fac, WindowViewType target)
+        private bool IsDaytime()
         {
-            if (IsWindowActive(target))
-            {
-                ChillEnvPlugin.Log?.LogInfo($"[跳过] 时间已是: {target}");
-                return;
-            }
-
-            ChillEnvPlugin.Log?.LogInfo($"[操作] 切换时间: {target}");
-
-            switch (target)
-            {
-                case WindowViewType.Day:
-                    fac.OnClickButtonChangeTimeDay();
-                    break;
-                case WindowViewType.Sunset:
-                    fac.OnClickButtonChangeTimeSunset();
-                    break;
-                case WindowViewType.Night:
-                    fac.OnClickButtonChangeTimeNight();
-                    break;
-                case WindowViewType.Cloudy:
-                    fac.OnClickButtonChangeTimeCloudy();
-                    break;
-            }
+            int hour = DateTime.Now.Hour;
+            return hour >= 6 && hour < 18;
         }
 
-        private static void ApplyWeather(int weatherCode, bool isDay)
+        // ========== 天气映射 ==========
+        private struct WeatherMapping
         {
-            var fac = ChillEnvPlugin.Facility;
-            if (fac == null)
-            {
-                ChillEnvPlugin.Log?.LogWarning("[AutoEnv] FacilityEnviroment 为空，跳过");
-                return;
-            }
+            public WindowViewType BaseEnvironment;           // 基础环境 (Day/Night/Sunset/Cloudy)
+            public WindowViewType? PrecipitationType;        // 降水类型 (可选)
+            public WindowViewType? SpecialEffect;            // 特殊效果 (如Snow)
+            public bool ClearAllPrecipitation;               // 是否清除所有降水
+        }
 
-            if (weatherCode < 0)
-            {
-                ChillEnvPlugin.Log?.LogWarning("[AutoEnv] 天气代码解析失败，跳过本次同步");
-                return;
-            }
-
-            LogCurrentState();
-
-            ChillEnvPlugin.Log?.LogInfo($"[AutoEnv] 应用天气: Code={weatherCode}, IsDay={isDay}");
+        private WeatherMapping GetWeatherMapping(string weatherCode, bool isDay)
+        {
+            WindowViewType baseEnv = isDay ? WindowViewType.Day : WindowViewType.Night;
 
             switch (weatherCode)
             {
-                case 0:
-                case 1:
-                case 2:
-                case 3:
-                    if (weatherCode <= 1)
+                // ===== 晴天 =====
+                case "0":  // 晴
+                case "1":  // 晴（夜间）
+                case "2":  // 晴
+                case "3":  // 晴（夜间）
+                    return new WeatherMapping
                     {
-                        SetBaseTime(fac, isDay ? WindowViewType.Day : WindowViewType.Night);
-                    }
-                    else
+                        BaseEnvironment = baseEnv,
+                        PrecipitationType = null,
+                        SpecialEffect = null,
+                        ClearAllPrecipitation = true
+                    };
+
+                // ===== 多云/阴 =====
+                case "4":  // 多云
+                case "5":  // 晴间多云（夜）
+                case "6":  // 晴间多云
+                case "7":  // 大部多云（夜）
+                case "8":  // 大部多云
+                case "9":  // 阴
+                    return new WeatherMapping
                     {
-                        SetBaseTime(fac, WindowViewType.Cloudy);
-                    }
-                    ClearPrecipitation(fac);
-                    ClearSnowIfNotSnowing(fac, weatherCode);
-                    break;
+                        BaseEnvironment = WindowViewType.Cloudy,
+                        PrecipitationType = null,
+                        SpecialEffect = null,
+                        ClearAllPrecipitation = true
+                    };
 
-                case 45:
-                case 48:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    ClearPrecipitation(fac);
-                    break;
-
-                case 51:
-                case 53:
-                case 55:
-                case 56:
-                case 57:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    SetPrecipitation(fac, WindowViewType.LightRain);
-                    break;
-
-                case 61:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    SetPrecipitation(fac, WindowViewType.LightRain);
-                    break;
-                case 63:
-                case 65:
-                case 66:
-                case 67:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    SetPrecipitation(fac, WindowViewType.HeavyRain);
-                    break;
-                case 80:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    SetPrecipitation(fac, WindowViewType.LightRain);
-                    break;
-                case 81:
-                case 82:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    SetPrecipitation(fac, WindowViewType.HeavyRain);
-                    break;
-
-                case 71:
-                case 73:
-                case 75:
-                case 77:
-                case 85:
-                case 86:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    ClearPrecipitation(fac);
-                    if (!IsWindowActive(WindowViewType.Snow))
+                // ===== 小雨/阵雨 =====
+                case "10": // 阵雨
+                case "13": // 小雨
+                case "14": // 中雨
+                case "19": // 冻雨
+                    return new WeatherMapping
                     {
-                        ChillEnvPlugin.Log?.LogInfo("[操作] 激活雪景");
-                        fac.ChangeWindowView(ChangeType.Activate, WindowViewType.Snow);
-                    }
-                    break;
+                        BaseEnvironment = WindowViewType.Cloudy,
+                        PrecipitationType = WindowViewType.LightRain,
+                        SpecialEffect = null,
+                        ClearAllPrecipitation = false
+                    };
 
-                case 95:
-                case 96:
-                case 99:
-                    SetBaseTime(fac, WindowViewType.Cloudy);
-                    SetPrecipitation(fac, WindowViewType.ThunderRain);
-                    break;
+                // ===== 大雨/暴雨 =====
+                case "15": // 大雨
+                case "16": // 暴雨
+                case "17": // 大暴雨
+                case "18": // 特大暴雨
+                    return new WeatherMapping
+                    {
+                        BaseEnvironment = WindowViewType.Cloudy,
+                        PrecipitationType = WindowViewType.HeavyRain,
+                        SpecialEffect = null,
+                        ClearAllPrecipitation = false
+                    };
 
+                // ===== 雷雨 =====
+                case "11": // 雷阵雨
+                case "12": // 雷阵雨伴有冰雹
+                    return new WeatherMapping
+                    {
+                        BaseEnvironment = WindowViewType.Cloudy,
+                        PrecipitationType = WindowViewType.ThunderRain,
+                        SpecialEffect = null,
+                        ClearAllPrecipitation = false
+                    };
+
+                // ===== 雪 =====
+                case "20": // 雨夹雪
+                case "21": // 小雪
+                case "22": // 中雪
+                case "23": // 雨夹雪
+                case "24": // 大雪
+                case "25": // 暴雪
+                    return new WeatherMapping
+                    {
+                        BaseEnvironment = WindowViewType.Cloudy,
+                        PrecipitationType = null,
+                        SpecialEffect = WindowViewType.Snow,
+                        ClearAllPrecipitation = true
+                    };
+
+                // ===== 雾/霾/沙尘 =====
+                case "30": // 雾
+                case "31": // 霾
+                case "32": // 扬沙
+                case "33": // 浮尘
+                case "34": // 沙尘暴
+                case "35": // 强沙尘暴
+                    return new WeatherMapping
+                    {
+                        BaseEnvironment = WindowViewType.Cloudy,
+                        PrecipitationType = null,
+                        SpecialEffect = null,
+                        ClearAllPrecipitation = true
+                    };
+
+                // ===== 默认 =====
                 default:
-                    ChillEnvPlugin.Log?.LogWarning($"[AutoEnv] 未知天气代码: {weatherCode}，使用默认");
-                    SetBaseTime(fac, isDay ? WindowViewType.Day : WindowViewType.Night);
-                    ClearPrecipitation(fac);
-                    break;
+                    MelonLogger.Warning($"未知天气代码: {weatherCode}, 使用默认映射");
+                    return new WeatherMapping
+                    {
+                        BaseEnvironment = baseEnv,
+                        PrecipitationType = null,
+                        SpecialEffect = null,
+                        ClearAllPrecipitation = true
+                    };
             }
-
-            LogCurrentState();
         }
 
-        private static void ClearSnowIfNotSnowing(FacilityEnviroment fac, int weatherCode)
+        // ========== 应用天气（核心逻辑） ==========
+        private void ApplyWeather(string weatherCode, bool isDay)
         {
-            bool isSnowWeather = weatherCode == 71 || weatherCode == 73 || weatherCode == 75
-                              || weatherCode == 77 || weatherCode == 85 || weatherCode == 86;
-
-            if (!isSnowWeather && IsWindowActive(WindowViewType.Snow))
+            if (_windowViewService == null)
             {
-                ChillEnvPlugin.Log?.LogInfo("[操作] 关闭雪景（非雪天）");
-                fac.ChangeWindowView(ChangeType.Deactivate, WindowViewType.Snow);
+                MelonLogger.Error("WindowViewService 未初始化");
+                return;
+            }
+
+            var mapping = GetWeatherMapping(weatherCode, isDay);
+
+            MelonLogger.Msg($"[应用天气] 基础环境={mapping.BaseEnvironment}, " +
+                           $"降水={mapping.PrecipitationType?.ToString() ?? "无"}, " +
+                           $"特效={mapping.SpecialEffect?.ToString() ?? "无"}, " +
+                           $"清除降水={mapping.ClearAllPrecipitation}");
+
+            try
+            {
+                // 1. 处理基础环境（Day/Sunset/Night/Cloudy 互斥）
+                ApplyBaseEnvironment(mapping.BaseEnvironment);
+
+                // 2. 处理降水（互斥）
+                ApplyPrecipitation(mapping.PrecipitationType, mapping.ClearAllPrecipitation);
+
+                // 3. 处理特殊效果（如雪）
+                if (mapping.SpecialEffect.HasValue)
+                {
+                    ApplySpecialEffect(mapping.SpecialEffect.Value);
+                }
+
+                // 4. 保存到存档
+                SaveEnvironmentState(mapping);
+
+                MelonLogger.Msg("[应用天气] 完成");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"应用天气失败: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        private void ApplyBaseEnvironment(WindowViewType target)
+        {
+            // 检查当前状态
+            WindowViewType? currentBase = null;
+            foreach (var env in BaseTimeWeather)
+            {
+                if (_windowViewService.IsActiveWindow(env))
+                {
+                    currentBase = env;
+                    break;
+                }
+            }
+
+            if (currentBase == target)
+            {
+                MelonLogger.Msg($"[基础环境] {target} 已激活，跳过");
+                return;
+            }
+
+            // 使用 ChangeWeatherAndTime，它会自动处理互斥
+            MelonLogger.Msg($"[基础环境] {currentBase?.ToString() ?? "无"} -> {target}");
+            _windowViewService.ChangeWeatherAndTime(target);
+        }
+
+        private void ApplyPrecipitation(WindowViewType? target, bool clearAll)
+        {
+            if (clearAll)
+            {
+                // 清除所有降水
+                foreach (var precip in PrecipitationWeather)
+                {
+                    if (_windowViewService.IsActiveWindow(precip))
+                    {
+                        MelonLogger.Msg($"[降水] 关闭: {precip}");
+                        _windowViewService.DeactivateWindow(precip);
+                    }
+                }
+            }
+            else if (target.HasValue)
+            {
+                // 关闭其他降水，激活目标降水
+                foreach (var precip in PrecipitationWeather)
+                {
+                    bool isActive = _windowViewService.IsActiveWindow(precip);
+                    bool shouldBeActive = (precip == target.Value);
+
+                    if (shouldBeActive && !isActive)
+                    {
+                        MelonLogger.Msg($"[降水] 激活: {precip}");
+                        _windowViewService.ActivateWindow(precip);
+                    }
+                    else if (!shouldBeActive && isActive)
+                    {
+                        MelonLogger.Msg($"[降水] 关闭: {precip}");
+                        _windowViewService.DeactivateWindow(precip);
+                    }
+                }
+            }
+        }
+
+        private void ApplySpecialEffect(WindowViewType effect)
+        {
+            if (!_windowViewService.IsActiveWindow(effect))
+            {
+                MelonLogger.Msg($"[特效] 激活: {effect}");
+                _windowViewService.ActivateWindow(effect);
+            }
+        }
+
+        private void SaveEnvironmentState(WeatherMapping mapping)
+        {
+            try
+            {
+                var saveData = SaveDataManager.Instance;
+                if (saveData?.WindowViewDic == null) return;
+
+                // 保存基础环境状态
+                foreach (var env in BaseTimeWeather)
+                {
+                    if (saveData.WindowViewDic.ContainsKey(env))
+                    {
+                        saveData.WindowViewDic[env].IsActive = (env == mapping.BaseEnvironment);
+                    }
+                }
+
+                // 保存降水状态
+                foreach (var precip in PrecipitationWeather)
+                {
+                    if (saveData.WindowViewDic.ContainsKey(precip))
+                    {
+                        bool shouldBeActive = mapping.PrecipitationType.HasValue &&
+                                             mapping.PrecipitationType.Value == precip;
+                        saveData.WindowViewDic[precip].IsActive = shouldBeActive;
+                    }
+                }
+
+                // 保存特效状态
+                if (mapping.SpecialEffect.HasValue &&
+                    saveData.WindowViewDic.ContainsKey(mapping.SpecialEffect.Value))
+                {
+                    saveData.WindowViewDic[mapping.SpecialEffect.Value].IsActive = true;
+                }
+
+                saveData.SaveEnviroment();
+                MelonLogger.Msg("[存档] 环境状态已保存");
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"保存存档失败: {ex.Message}");
             }
         }
     }
