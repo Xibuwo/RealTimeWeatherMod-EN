@@ -12,7 +12,7 @@ using Bulbul;
 
 namespace ChillWithYou.EnvSync
 {
-    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.2.0")]
+    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.3.1")]
     public class ChillEnvPlugin : BaseUnityPlugin
     {
         internal static ChillEnvPlugin Instance;
@@ -24,16 +24,21 @@ namespace ChillWithYou.EnvSync
 
         internal static bool Initialized;
 
-        // 配置项
+        // --- 配置项 ---
         internal static ConfigEntry<int> Cfg_WeatherRefreshMinutes;
         internal static ConfigEntry<string> Cfg_SunriseTime;
         internal static ConfigEntry<string> Cfg_SunsetTime;
         internal static ConfigEntry<string> Cfg_SeniverseKey;
         internal static ConfigEntry<string> Cfg_Location;
         internal static ConfigEntry<bool> Cfg_EnableWeatherSync;
-
         internal static ConfigEntry<bool> Cfg_UnlockEnvironments;
         internal static ConfigEntry<bool> Cfg_UnlockDecorations;
+
+        // 调试配置
+        internal static ConfigEntry<bool> Cfg_DebugMode;
+        internal static ConfigEntry<int> Cfg_DebugCode;
+        internal static ConfigEntry<int> Cfg_DebugTemp;
+        internal static ConfigEntry<string> Cfg_DebugText;
 
         private static AutoEnvRunner _runner;
         private static GameObject _runnerGO;
@@ -43,7 +48,7 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo("【4.2.0】启动 - F7缓存穿透修复 (真正强制刷新)");
+            Log.LogInfo("【4.3.1】启动 - 彻底移除降水天气对Service的误调用");
 
             try
             {
@@ -84,6 +89,11 @@ namespace ChillWithYou.EnvSync
 
             Cfg_UnlockEnvironments = Config.Bind("Unlock", "UnlockAllEnvironments", true, "是否自动解锁所有环境场景");
             Cfg_UnlockDecorations = Config.Bind("Unlock", "UnlockAllDecorations", true, "是否自动解锁所有装饰品");
+
+            Cfg_DebugMode = Config.Bind("Debug", "EnableDebugMode", false, "是否开启调试模式");
+            Cfg_DebugCode = Config.Bind("Debug", "SimulatedCode", 1, "模拟天气代码");
+            Cfg_DebugTemp = Config.Bind("Debug", "SimulatedTemp", 25, "模拟温度");
+            Cfg_DebugText = Config.Bind("Debug", "SimulatedText", "DebugWeather", "模拟天气描述");
         }
 
         internal static void TryInitializeOnce(UnlockItemService svc)
@@ -91,7 +101,6 @@ namespace ChillWithYou.EnvSync
             if (Initialized || svc == null) return;
 
             if (Cfg_UnlockEnvironments.Value) ForceUnlockAllEnvironments(svc);
-
             if (Cfg_UnlockDecorations.Value) ForceUnlockAllDecorations(svc);
 
             Initialized = true;
@@ -235,10 +244,8 @@ namespace ChillWithYou.EnvSync
 
         public static WeatherInfo CachedWeather => _cachedWeather;
 
-        // 【新增】force 参数，用于控制是否无视缓存
         public static IEnumerator FetchWeather(string apiKey, string location, bool force, Action<WeatherInfo> onComplete)
         {
-            // 只有当 !force 时，才检查缓存
             if (!force && _cachedWeather != null && DateTime.Now - _lastFetchTime < CacheExpiry)
             {
                 onComplete?.Invoke(_cachedWeather);
@@ -345,7 +352,7 @@ namespace ChillWithYou.EnvSync
             return json.Substring(start, end - start);
         }
 
-        private static WeatherCondition MapCodeToCondition(int code)
+        public static WeatherCondition MapCodeToCondition(int code)
         {
             if (code >= 0 && code <= 3) return WeatherCondition.Clear;
             if (code >= 4 && code <= 9) return WeatherCondition.Cloudy;
@@ -394,7 +401,6 @@ namespace ChillWithYou.EnvSync
         {
             if (!ChillEnvPlugin.Initialized || EnvRegistry.Count == 0) return;
 
-            // F9: 强制刷新决策 (Force=true)
             if (Input.GetKeyDown(KeyCode.F9))
             {
                 ChillEnvPlugin.Log?.LogInfo("F9: 手动强制同步状态");
@@ -403,14 +409,14 @@ namespace ChillWithYou.EnvSync
             if (Input.GetKeyDown(KeyCode.F8)) ShowStatus();
             if (Input.GetKeyDown(KeyCode.F7))
             {
-                ChillEnvPlugin.Log?.LogInfo("F7: 强制刷新天气 (忽略缓存)");
+                ChillEnvPlugin.Log?.LogInfo("F7: 强制重载 (尝试读取最新配置/API)");
+                ChillEnvPlugin.Instance.Config.Reload();
                 ForceRefreshWeather();
             }
 
             if (Time.time >= _nextTimeCheckTime)
             {
                 _nextTimeCheckTime = Time.time + 30f;
-                // 自动时钟: 非强制 (Force=false)
                 TriggerSync(forceApi: false, forceApply: false);
             }
 
@@ -429,6 +435,11 @@ namespace ChillWithYou.EnvSync
             ChillEnvPlugin.Log?.LogInfo($"插件记录: {_lastAppliedEnv}");
             var currentActive = GetCurrentActiveEnvironment();
             ChillEnvPlugin.Log?.LogInfo($"游戏实际: {currentActive}");
+
+            if (ChillEnvPlugin.Cfg_DebugMode.Value)
+            {
+                ChillEnvPlugin.Log?.LogWarning("【警告】调试模式已开启！API请求被屏蔽。");
+            }
         }
 
         private void ForceRefreshWeather()
@@ -439,6 +450,22 @@ namespace ChillWithYou.EnvSync
 
         private void TriggerSync(bool forceApi, bool forceApply)
         {
+            if (ChillEnvPlugin.Cfg_DebugMode.Value)
+            {
+                ChillEnvPlugin.Log?.LogWarning("[调试模式] 使用模拟数据...");
+                int mockCode = ChillEnvPlugin.Cfg_DebugCode.Value;
+                var mockWeather = new WeatherInfo
+                {
+                    Code = mockCode,
+                    Temperature = ChillEnvPlugin.Cfg_DebugTemp.Value,
+                    Text = ChillEnvPlugin.Cfg_DebugText.Value,
+                    Condition = WeatherService.MapCodeToCondition(mockCode),
+                    UpdateTime = DateTime.Now
+                };
+                ApplyEnvironment(mockWeather, forceApply);
+                return;
+            }
+
             bool weatherEnabled = ChillEnvPlugin.Cfg_EnableWeatherSync.Value;
             string apiKey = ChillEnvPlugin.Cfg_SeniverseKey.Value;
 
@@ -446,7 +473,6 @@ namespace ChillWithYou.EnvSync
             {
                 string location = ChillEnvPlugin.Cfg_Location.Value;
 
-                // 【修复】把 forceApi 传递给 FetchWeather，以便跳过缓存检查
                 if (forceApi || WeatherService.CachedWeather == null)
                 {
                     if (_isFetching) return;
@@ -454,13 +480,10 @@ namespace ChillWithYou.EnvSync
                     StartCoroutine(WeatherService.FetchWeather(apiKey, location, forceApi, (weather) =>
                     {
                         _isFetching = false;
-                        if (weather != null)
-                        {
-                            ApplyEnvironment(weather, forceApply);
-                        }
+                        if (weather != null) ApplyEnvironment(weather, forceApply);
                         else
                         {
-                            ChillEnvPlugin.Log?.LogWarning("[API异常] 启用时间兜底模式");
+                            ChillEnvPlugin.Log?.LogWarning("[API异常] 启用时间兜底");
                             ApplyTimeBasedEnvironment(forceApply);
                         }
                     }));
@@ -516,7 +539,7 @@ namespace ChillWithYou.EnvSync
                 if (!IsEnvironmentActive(envType))
                 {
                     ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-                    ChillEnvPlugin.CallServiceChangeWeather(envType);
+                    // 【修复】移除这里的 CallServiceChangeWeather，改为在 ActivateEnvironmentWithMutex 中统一管理
                 }
             }
         }
@@ -532,24 +555,20 @@ namespace ChillWithYou.EnvSync
             }
         }
 
-        // 强制激活 (不检查当前状态，直接调用 Service)
         private void ForceActivateEnvironment(EnvironmentType envType)
         {
             if (EnvRegistry.TryGet(envType, out var ctrl))
             {
-                // 如果当前未激活，点击它
                 if (!IsEnvironmentActive(envType))
                 {
                     ChillEnvPlugin.SimulateClickMainIcon(ctrl);
                 }
-                // 无论如何，都再次调用 Service 确保对齐
-                ChillEnvPlugin.CallServiceChangeWeather(envType);
+                // 【修复】移除 CallServiceChangeWeather
             }
         }
 
         private void ActivateEnvironmentWithMutex(EnvironmentType target, bool force)
         {
-            // 如果不是强制模式，且当前环境已激活，则跳过
             if (!force && IsEnvironmentActive(target)) return;
 
             bool isBaseEnv = Array.IndexOf(BaseEnvironments, target) >= 0;
@@ -578,14 +597,15 @@ namespace ChillWithYou.EnvSync
                 ChillEnvPlugin.Log?.LogInfo($"[决策] 切换至 {target}");
             }
 
-            // 无论如何，最后都调用一次 Service 兜底
-            ChillEnvPlugin.CallServiceChangeWeather(target);
+            // 【关键修复】只有基础环境才允许调用 Service，防止 Precipitation (Snow/Rain) 覆盖掉背景
+            if (isBaseEnv)
+            {
+                ChillEnvPlugin.CallServiceChangeWeather(target);
+            }
         }
 
         private void ClearAllWeatherEffects()
         {
-            if (IsEnvironmentActive(EnvironmentType.Cloudy)) DeactivateEnvironment(EnvironmentType.Cloudy);
-
             foreach (var env in PrecipitationWeathers)
             {
                 if (IsEnvironmentActive(env))
@@ -613,7 +633,6 @@ namespace ChillWithYou.EnvSync
 
         private void ApplyEnvironment(WeatherInfo weather, bool force)
         {
-            // 在 force 模式下，强制打印日志
             if (force || _lastAppliedEnv == null)
             {
                 ChillEnvPlugin.Log?.LogInfo($"[决策] 天气:{weather.Text}(Code:{weather.Code}) 温度:{weather.Temperature}°C");
@@ -658,7 +677,6 @@ namespace ChillWithYou.EnvSync
                 ActivateEnvironmentWithMutex(timeEnv, force);
             }
 
-            // 记录最后一次环境
             _lastAppliedEnv = timeEnv;
         }
 
