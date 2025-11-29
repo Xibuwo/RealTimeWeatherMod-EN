@@ -12,7 +12,7 @@ using Bulbul;
 
 namespace ChillWithYou.EnvSync
 {
-    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.1.0")]
+    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.2.0")]
     public class ChillEnvPlugin : BaseUnityPlugin
     {
         internal static ChillEnvPlugin Instance;
@@ -43,7 +43,7 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo("【4.1.0】启动 - F9强制重置版 (修复无响应问题)");
+            Log.LogInfo("【4.2.0】启动 - F7缓存穿透修复 (真正强制刷新)");
 
             try
             {
@@ -235,9 +235,11 @@ namespace ChillWithYou.EnvSync
 
         public static WeatherInfo CachedWeather => _cachedWeather;
 
-        public static IEnumerator FetchWeather(string apiKey, string location, Action<WeatherInfo> onComplete)
+        // 【新增】force 参数，用于控制是否无视缓存
+        public static IEnumerator FetchWeather(string apiKey, string location, bool force, Action<WeatherInfo> onComplete)
         {
-            if (_cachedWeather != null && DateTime.Now - _lastFetchTime < CacheExpiry)
+            // 只有当 !force 时，才检查缓存
+            if (!force && _cachedWeather != null && DateTime.Now - _lastFetchTime < CacheExpiry)
             {
                 onComplete?.Invoke(_cachedWeather);
                 yield break;
@@ -399,12 +401,16 @@ namespace ChillWithYou.EnvSync
                 TriggerSync(forceApi: false, forceApply: true);
             }
             if (Input.GetKeyDown(KeyCode.F8)) ShowStatus();
-            if (Input.GetKeyDown(KeyCode.F7)) ForceRefreshWeather();
+            if (Input.GetKeyDown(KeyCode.F7))
+            {
+                ChillEnvPlugin.Log?.LogInfo("F7: 强制刷新天气 (忽略缓存)");
+                ForceRefreshWeather();
+            }
 
             if (Time.time >= _nextTimeCheckTime)
             {
                 _nextTimeCheckTime = Time.time + 30f;
-                // 自动时钟: 非强制 (Force=false)，如果状态没变就静默
+                // 自动时钟: 非强制 (Force=false)
                 TriggerSync(forceApi: false, forceApply: false);
             }
 
@@ -440,11 +446,12 @@ namespace ChillWithYou.EnvSync
             {
                 string location = ChillEnvPlugin.Cfg_Location.Value;
 
+                // 【修复】把 forceApi 传递给 FetchWeather，以便跳过缓存检查
                 if (forceApi || WeatherService.CachedWeather == null)
                 {
                     if (_isFetching) return;
                     _isFetching = true;
-                    StartCoroutine(WeatherService.FetchWeather(apiKey, location, (weather) =>
+                    StartCoroutine(WeatherService.FetchWeather(apiKey, location, forceApi, (weather) =>
                     {
                         _isFetching = false;
                         if (weather != null)
