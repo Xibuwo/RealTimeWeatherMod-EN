@@ -12,7 +12,7 @@ using Bulbul;
 
 namespace ChillWithYou.EnvSync
 {
-    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "3.6.0")]
+    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "4.1.0")]
     public class ChillEnvPlugin : BaseUnityPlugin
     {
         internal static ChillEnvPlugin Instance;
@@ -32,7 +32,6 @@ namespace ChillWithYou.EnvSync
         internal static ConfigEntry<string> Cfg_Location;
         internal static ConfigEntry<bool> Cfg_EnableWeatherSync;
 
-        // 【新增】解锁控制开关
         internal static ConfigEntry<bool> Cfg_UnlockEnvironments;
         internal static ConfigEntry<bool> Cfg_UnlockDecorations;
 
@@ -44,7 +43,7 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo("【3.6.0】启动 - 添加解锁内容配置开关");
+            Log.LogInfo("【4.1.0】启动 - F9强制重置版 (修复无响应问题)");
 
             try
             {
@@ -75,7 +74,7 @@ namespace ChillWithYou.EnvSync
 
         private void InitConfig()
         {
-            Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 30, "自动刷新间隔(分钟)");
+            Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 30, "天气API刷新间隔(分钟)");
             Cfg_SunriseTime = Config.Bind("TimeConfig", "Sunrise", "06:30", "日出时间");
             Cfg_SunsetTime = Config.Bind("TimeConfig", "Sunset", "18:30", "日落时间");
 
@@ -83,33 +82,17 @@ namespace ChillWithYou.EnvSync
             Cfg_SeniverseKey = Config.Bind("WeatherAPI", "SeniverseKey", "", "心知天气 API Key");
             Cfg_Location = Config.Bind("WeatherAPI", "Location", "beijing", "城市名称（拼音或中文，如 beijing、上海、ip 表示自动定位）");
 
-            // 【新增】解锁配置，默认值为 true (保持老用户体验一致)
-            Cfg_UnlockEnvironments = Config.Bind("Unlock", "UnlockAllEnvironments", true, "是否自动解锁所有环境场景 (默认开启，设为false则保持游戏原状)");
-            Cfg_UnlockDecorations = Config.Bind("Unlock", "UnlockAllDecorations", true, "是否自动解锁所有装饰品 (默认开启，设为false则保持游戏原状)");
+            Cfg_UnlockEnvironments = Config.Bind("Unlock", "UnlockAllEnvironments", true, "是否自动解锁所有环境场景");
+            Cfg_UnlockDecorations = Config.Bind("Unlock", "UnlockAllDecorations", true, "是否自动解锁所有装饰品");
         }
 
         internal static void TryInitializeOnce(UnlockItemService svc)
         {
             if (Initialized || svc == null) return;
 
-            // 【修改】根据配置决定是否执行解锁逻辑
-            if (Cfg_UnlockEnvironments.Value)
-            {
-                ForceUnlockAllEnvironments(svc);
-            }
-            else
-            {
-                Log?.LogInfo("配置设定为不自动解锁环境，跳过");
-            }
+            if (Cfg_UnlockEnvironments.Value) ForceUnlockAllEnvironments(svc);
 
-            if (Cfg_UnlockDecorations.Value)
-            {
-                ForceUnlockAllDecorations(svc);
-            }
-            else
-            {
-                Log?.LogInfo("配置设定为不自动解锁装饰品，跳过");
-            }
+            if (Cfg_UnlockDecorations.Value) ForceUnlockAllDecorations(svc);
 
             Initialized = true;
             Log?.LogInfo("初始化完成");
@@ -141,22 +124,15 @@ namespace ChillWithYou.EnvSync
             }
         }
 
-        // 模拟点击 MainIcon (按钮A)
         internal static void SimulateClickMainIcon(EnviromentController ctrl)
         {
             if (ctrl == null) return;
             try
             {
-                // 反射调用 OnClickButtonMainIcon
                 MethodInfo clickMethod = ctrl.GetType().GetMethod("OnClickButtonMainIcon", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 if (clickMethod != null)
                 {
                     clickMethod.Invoke(ctrl, null);
-                    // Log?.LogInfo($"[模拟点击] {ctrl.EnvironmentType} MainIcon");
-                }
-                else
-                {
-                    Log?.LogWarning($"[警告] 未找到 OnClickButtonMainIcon 方法: {ctrl.EnvironmentType}");
                 }
             }
             catch (Exception ex)
@@ -171,10 +147,8 @@ namespace ChillWithYou.EnvSync
             {
                 var envProp = svc.GetType().GetProperty("Environment");
                 var unlockEnvObj = envProp.GetValue(svc);
-
                 var dictField = unlockEnvObj.GetType().GetField("_environmentDic", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
                 var dict = dictField.GetValue(unlockEnvObj) as IDictionary;
-
                 int count = 0;
                 foreach (DictionaryEntry entry in dict)
                 {
@@ -187,10 +161,7 @@ namespace ChillWithYou.EnvSync
                 }
                 Log?.LogInfo($"✅ 已解锁 {count} 个环境");
             }
-            catch (Exception ex)
-            {
-                Log?.LogError("环境解锁异常: " + ex.Message);
-            }
+            catch { }
         }
 
         private static void ForceUnlockAllDecorations(UnlockItemService svc)
@@ -199,38 +170,28 @@ namespace ChillWithYou.EnvSync
             {
                 var decoProp = svc.GetType().GetProperty("Decoration");
                 if (decoProp == null) return;
-
                 var unlockDecoObj = decoProp.GetValue(svc);
                 if (unlockDecoObj == null) return;
-
                 var dictField = unlockDecoObj.GetType().GetField("_decorationDic", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
                 if (dictField == null) return;
-
                 var dict = dictField.GetValue(unlockDecoObj) as IDictionary;
                 if (dict == null) return;
-
                 int count = 0;
                 foreach (DictionaryEntry entry in dict)
                 {
                     var data = entry.Value;
                     var lockField = data.GetType().GetField("_isLocked", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
                     if (lockField == null) continue;
-
                     var reactive = lockField.GetValue(data);
                     if (reactive == null) continue;
-
                     var propValue = reactive.GetType().GetProperty("Value");
                     if (propValue == null) continue;
-
                     propValue.SetValue(reactive, false, null);
                     count++;
                 }
                 Log?.LogInfo($"✅ 已解锁 {count} 个装饰品");
             }
-            catch (Exception ex)
-            {
-                Log?.LogError("装饰品解锁异常: " + ex.Message);
-            }
+            catch { }
         }
     }
 
@@ -249,35 +210,11 @@ namespace ChillWithYou.EnvSync
         public override string ToString() => $"{Text}({Condition}), {Temperature}°C, Code={Code}";
     }
 
-    [Serializable]
-    public class WeatherApiResponse
-    {
-        public WeatherResult[] results;
-    }
-    [Serializable]
-    public class WeatherResult
-    {
-        public WeatherLocation location;
-        public WeatherNow now;
-    }
-    [Serializable]
-    public class WeatherLocation
-    {
-        public string name;
-    }
-    [Serializable]
-    public class WeatherNow
-    {
-        public string text;
-        public string code;
-        public string temperature;
-    }
-
     public class WeatherService
     {
         private static WeatherInfo _cachedWeather;
         private static DateTime _lastFetchTime;
-        private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(60);
 
         private static readonly Dictionary<string, EnvironmentType> WeatherToEnvironment = new Dictionary<string, EnvironmentType>(StringComparer.OrdinalIgnoreCase)
         {
@@ -296,27 +233,19 @@ namespace ChillWithYou.EnvSync
             {"Tornado", EnvironmentType.ThunderRain},
         };
 
-        internal static bool TryGetEnvironment(string weatherText, out EnvironmentType env)
-        {
-            env = default(EnvironmentType);
-            if (string.IsNullOrEmpty(weatherText)) return false;
-            return WeatherToEnvironment.TryGetValue(weatherText.Trim(), out env);
-        }
-
         public static WeatherInfo CachedWeather => _cachedWeather;
 
         public static IEnumerator FetchWeather(string apiKey, string location, Action<WeatherInfo> onComplete)
         {
             if (_cachedWeather != null && DateTime.Now - _lastFetchTime < CacheExpiry)
             {
-                ChillEnvPlugin.Log?.LogInfo($"使用缓存天气: {_cachedWeather}");
                 onComplete?.Invoke(_cachedWeather);
                 yield break;
             }
 
             string url = $"https://api.seniverse.com/v3/weather/now.json?key={apiKey}&location={UnityWebRequest.EscapeURL(location)}&language=zh-Hans&unit=c";
 
-            ChillEnvPlugin.Log?.LogInfo($"请求天气: {location}");
+            ChillEnvPlugin.Log?.LogInfo($"[API] 发起请求: {location}");
 
             using (UnityWebRequest request = UnityWebRequest.Get(url))
             {
@@ -325,12 +254,19 @@ namespace ChillWithYou.EnvSync
 
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    ChillEnvPlugin.Log?.LogWarning($"天气API请求失败: {request.error}");
+                    ChillEnvPlugin.Log?.LogWarning($"[API] 网络错误: {request.result}, Code: {request.responseCode}, Error: {request.error}");
                     onComplete?.Invoke(null);
                     yield break;
                 }
 
                 string json = request.downloadHandler.text;
+                if (string.IsNullOrEmpty(json))
+                {
+                    ChillEnvPlugin.Log?.LogWarning("[API] 错误: 返回内容为空");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
+
                 try
                 {
                     var weather = ParseWeatherJson(json);
@@ -338,18 +274,18 @@ namespace ChillWithYou.EnvSync
                     {
                         _cachedWeather = weather;
                         _lastFetchTime = DateTime.Now;
-                        ChillEnvPlugin.Log?.LogInfo($"🌤️ 天气解析成功: {weather}");
+                        ChillEnvPlugin.Log?.LogInfo($"[API] 数据更新: {weather}");
                         onComplete?.Invoke(weather);
                     }
                     else
                     {
-                        ChillEnvPlugin.Log?.LogWarning("天气数据解析失败");
+                        ChillEnvPlugin.Log?.LogWarning($"[API] 解析失败! 原始返回: {json}");
                         onComplete?.Invoke(null);
                     }
                 }
                 catch (Exception ex)
                 {
-                    ChillEnvPlugin.Log?.LogError($"解析天气数据异常: {ex.Message}");
+                    ChillEnvPlugin.Log?.LogError($"[API] 异常: {ex.Message}");
                     onComplete?.Invoke(null);
                 }
             }
@@ -359,6 +295,11 @@ namespace ChillWithYou.EnvSync
         {
             try
             {
+                if (json.Contains("\"status\"") && !json.Contains("\"results\""))
+                {
+                    return null;
+                }
+
                 int nowIndex = json.IndexOf("\"now\"");
                 if (nowIndex < 0) return null;
 
@@ -418,7 +359,9 @@ namespace ChillWithYou.EnvSync
 
     public class AutoEnvRunner : MonoBehaviour
     {
-        private float _nextTickTime;
+        private float _nextWeatherCheckTime;
+        private float _nextTimeCheckTime;
+
         private EnvironmentType? _lastAppliedEnv;
         private bool _isFetching;
 
@@ -440,23 +383,36 @@ namespace ChillWithYou.EnvSync
 
         private void Start()
         {
-            _nextTickTime = Time.time + 15f;
-            ChillEnvPlugin.Log?.LogInfo("Runner 启动，15秒后首次同步");
+            _nextWeatherCheckTime = Time.time + 10f;
+            _nextTimeCheckTime = Time.time + 10f;
+            ChillEnvPlugin.Log?.LogInfo("Runner 启动，等待首次同步...");
         }
 
         private void Update()
         {
             if (!ChillEnvPlugin.Initialized || EnvRegistry.Count == 0) return;
 
-            if (Input.GetKeyDown(KeyCode.F9)) TriggerSync();
+            // F9: 强制刷新决策 (Force=true)
+            if (Input.GetKeyDown(KeyCode.F9))
+            {
+                ChillEnvPlugin.Log?.LogInfo("F9: 手动强制同步状态");
+                TriggerSync(forceApi: false, forceApply: true);
+            }
             if (Input.GetKeyDown(KeyCode.F8)) ShowStatus();
             if (Input.GetKeyDown(KeyCode.F7)) ForceRefreshWeather();
 
-            if (Time.time >= _nextTickTime)
+            if (Time.time >= _nextTimeCheckTime)
+            {
+                _nextTimeCheckTime = Time.time + 30f;
+                // 自动时钟: 非强制 (Force=false)，如果状态没变就静默
+                TriggerSync(forceApi: false, forceApply: false);
+            }
+
+            if (Time.time >= _nextWeatherCheckTime)
             {
                 int minutes = Mathf.Max(1, ChillEnvPlugin.Cfg_WeatherRefreshMinutes.Value);
-                _nextTickTime = Time.time + (minutes * 60f);
-                TriggerSync();
+                _nextWeatherCheckTime = Time.time + (minutes * 60f);
+                TriggerSync(forceApi: true, forceApply: false);
             }
         }
 
@@ -471,38 +427,45 @@ namespace ChillWithYou.EnvSync
 
         private void ForceRefreshWeather()
         {
-            if (_isFetching) return;
-            string apiKey = ChillEnvPlugin.Cfg_SeniverseKey.Value;
-            string location = ChillEnvPlugin.Cfg_Location.Value;
-            if (string.IsNullOrEmpty(apiKey)) return;
-
-            _isFetching = true;
-            StartCoroutine(WeatherService.FetchWeather(apiKey, location, (weather) =>
-            {
-                _isFetching = false;
-                if (weather != null) ApplyEnvironment(weather);
-            }));
+            _nextWeatherCheckTime = Time.time + (ChillEnvPlugin.Cfg_WeatherRefreshMinutes.Value * 60f);
+            TriggerSync(forceApi: true, forceApply: false);
         }
 
-        private void TriggerSync()
+        private void TriggerSync(bool forceApi, bool forceApply)
         {
             bool weatherEnabled = ChillEnvPlugin.Cfg_EnableWeatherSync.Value;
             string apiKey = ChillEnvPlugin.Cfg_SeniverseKey.Value;
 
-            if (weatherEnabled && !string.IsNullOrEmpty(apiKey) && !_isFetching)
+            if (weatherEnabled && !string.IsNullOrEmpty(apiKey))
             {
                 string location = ChillEnvPlugin.Cfg_Location.Value;
-                _isFetching = true;
-                StartCoroutine(WeatherService.FetchWeather(apiKey, location, (weather) =>
+
+                if (forceApi || WeatherService.CachedWeather == null)
                 {
-                    _isFetching = false;
-                    if (weather != null) ApplyEnvironment(weather);
-                    else ApplyTimeBasedEnvironment();
-                }));
+                    if (_isFetching) return;
+                    _isFetching = true;
+                    StartCoroutine(WeatherService.FetchWeather(apiKey, location, (weather) =>
+                    {
+                        _isFetching = false;
+                        if (weather != null)
+                        {
+                            ApplyEnvironment(weather, forceApply);
+                        }
+                        else
+                        {
+                            ChillEnvPlugin.Log?.LogWarning("[API异常] 启用时间兜底模式");
+                            ApplyTimeBasedEnvironment(forceApply);
+                        }
+                    }));
+                }
+                else
+                {
+                    ApplyEnvironment(WeatherService.CachedWeather, forceApply);
+                }
             }
             else
             {
-                ApplyTimeBasedEnvironment();
+                ApplyTimeBasedEnvironment(forceApply);
             }
         }
 
@@ -543,11 +506,9 @@ namespace ChillWithYou.EnvSync
         {
             if (EnvRegistry.TryGet(envType, out var ctrl))
             {
-                // 如果当前没开，就点一下 MainIcon (它是Toggle)
                 if (!IsEnvironmentActive(envType))
                 {
                     ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-                    // 补刀：如果模拟点击失败（比如方法名不对），再尝试 Service
                     ChillEnvPlugin.CallServiceChangeWeather(envType);
                 }
             }
@@ -557,24 +518,32 @@ namespace ChillWithYou.EnvSync
         {
             if (EnvRegistry.TryGet(envType, out var ctrl))
             {
-                // 如果当前开着，就点一下 MainIcon (Toggle 会把它关掉)
                 if (IsEnvironmentActive(envType))
                 {
                     ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-
-                    // 特殊处理：如果是 3.3.0 那样 UI 没关掉，可能需要手动 Service 修正
-                    // 但通常 MainIcon 会处理好一切
-                    // 如果模拟点击成功，SaveData 和 Service 应该会自动更新
                 }
             }
         }
 
-        private void ActivateEnvironmentWithMutex(EnvironmentType target)
+        // 强制激活 (不检查当前状态，直接调用 Service)
+        private void ForceActivateEnvironment(EnvironmentType envType)
         {
-            // 策略：
-            // 1. 先关闭互斥组里的其他环境 (通过模拟点击)
-            // 2. 再开启目标环境 (通过模拟点击)
-            // 3. 最后用 Service 兜底 (确保天气层同步)
+            if (EnvRegistry.TryGet(envType, out var ctrl))
+            {
+                // 如果当前未激活，点击它
+                if (!IsEnvironmentActive(envType))
+                {
+                    ChillEnvPlugin.SimulateClickMainIcon(ctrl);
+                }
+                // 无论如何，都再次调用 Service 确保对齐
+                ChillEnvPlugin.CallServiceChangeWeather(envType);
+            }
+        }
+
+        private void ActivateEnvironmentWithMutex(EnvironmentType target, bool force)
+        {
+            // 如果不是强制模式，且当前环境已激活，则跳过
+            if (!force && IsEnvironmentActive(target)) return;
 
             bool isBaseEnv = Array.IndexOf(BaseEnvironments, target) >= 0;
             bool isPrecipitation = Array.IndexOf(PrecipitationWeathers, target) >= 0;
@@ -591,11 +560,18 @@ namespace ChillWithYou.EnvSync
                     if (env != target) DeactivateEnvironment(env);
             }
 
-            // 开启目标
-            ActivateEnvironment(target);
-            ChillEnvPlugin.Log?.LogInfo($"[决策] 切换至 {target}");
+            if (force)
+            {
+                ForceActivateEnvironment(target);
+                ChillEnvPlugin.Log?.LogInfo($"[强制决策] 刷新至 {target}");
+            }
+            else
+            {
+                ActivateEnvironment(target);
+                ChillEnvPlugin.Log?.LogInfo($"[决策] 切换至 {target}");
+            }
 
-            // 兜底同步 Service (防止点击没触发天气系统)
+            // 无论如何，最后都调用一次 Service 兜底
             ChillEnvPlugin.CallServiceChangeWeather(target);
         }
 
@@ -608,7 +584,6 @@ namespace ChillWithYou.EnvSync
                 if (IsEnvironmentActive(env))
                 {
                     DeactivateEnvironment(env);
-                    ChillEnvPlugin.Log?.LogInfo($"[清除] {env}");
                 }
             }
         }
@@ -621,7 +596,7 @@ namespace ChillWithYou.EnvSync
             if (!TimeSpan.TryParse(ChillEnvPlugin.Cfg_SunriseTime.Value, out sunrise)) sunrise = new TimeSpan(6, 30, 0);
             if (!TimeSpan.TryParse(ChillEnvPlugin.Cfg_SunsetTime.Value, out sunset)) sunset = new TimeSpan(18, 30, 0);
 
-            TimeSpan sunsetStart = sunset.Subtract(TimeSpan.FromHours(1));
+            TimeSpan sunsetStart = sunset.Subtract(TimeSpan.FromMinutes(30));
             TimeSpan sunsetEnd = sunset.Add(TimeSpan.FromMinutes(30));
 
             if (currentTime >= sunrise && currentTime < sunsetStart) return EnvironmentType.Day;
@@ -629,57 +604,62 @@ namespace ChillWithYou.EnvSync
             else return EnvironmentType.Night;
         }
 
-        private void ApplyEnvironment(WeatherInfo weather)
+        private void ApplyEnvironment(WeatherInfo weather, bool force)
         {
-            DateTime now = DateTime.Now;
-            ChillEnvPlugin.Log?.LogInfo($"[API] {weather.Text}(Code:{weather.Code})");
+            // 在 force 模式下，强制打印日志
+            if (force || _lastAppliedEnv == null)
+            {
+                ChillEnvPlugin.Log?.LogInfo($"[决策] 天气:{weather.Text}(Code:{weather.Code}) 温度:{weather.Temperature}°C");
+            }
 
             EnvironmentType timeEnv = GetTimeBasedEnvironment();
             int code = weather.Code;
 
-            if (code >= 0 && code <= 3) // 晴天
+            if (code >= 0 && code <= 3)
             {
                 ClearAllWeatherEffects();
-                ActivateEnvironmentWithMutex(timeEnv);
+                ActivateEnvironmentWithMutex(timeEnv, force);
             }
-            else if (code >= 4 && code <= 9) // 阴天
+            else if (code >= 4 && code <= 9)
             {
                 ClearAllWeatherEffects();
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy);
+                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
             }
-            else if (code >= 10 && code <= 12) // 小雨
+            else if (code >= 10 && code <= 12)
             {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy);
-                ActivateEnvironmentWithMutex(EnvironmentType.LightRain);
+                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
+                ActivateEnvironmentWithMutex(EnvironmentType.LightRain, force);
             }
-            else if (code >= 13 && code <= 14) // 大雨
+            else if (code >= 13 && code <= 14)
             {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy);
-                ActivateEnvironmentWithMutex(EnvironmentType.HeavyRain);
+                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
+                ActivateEnvironmentWithMutex(EnvironmentType.HeavyRain, force);
             }
-            else if (code >= 15 && code <= 18) // 雷雨
+            else if (code >= 15 && code <= 18)
             {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy);
-                ActivateEnvironmentWithMutex(EnvironmentType.ThunderRain);
+                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
+                ActivateEnvironmentWithMutex(EnvironmentType.ThunderRain, force);
             }
-            else if (code >= 21 && code <= 25) // 雪
+            else if (code >= 21 && code <= 25)
             {
-                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy);
-                ActivateEnvironmentWithMutex(EnvironmentType.Snow);
+                ActivateEnvironmentWithMutex(EnvironmentType.Cloudy, force);
+                ActivateEnvironmentWithMutex(EnvironmentType.Snow, force);
             }
             else
             {
                 ClearAllWeatherEffects();
-                ActivateEnvironmentWithMutex(timeEnv);
+                ActivateEnvironmentWithMutex(timeEnv, force);
             }
-            ChillEnvPlugin.Log?.LogInfo("✅ 完成");
+
+            // 记录最后一次环境
+            _lastAppliedEnv = timeEnv;
         }
 
-        private void ApplyTimeBasedEnvironment()
+        private void ApplyTimeBasedEnvironment(bool force)
         {
             EnvironmentType targetEnv = GetTimeBasedEnvironment();
             ClearAllWeatherEffects();
-            ActivateEnvironmentWithMutex(targetEnv);
+            ActivateEnvironmentWithMutex(targetEnv, force);
         }
     }
 
