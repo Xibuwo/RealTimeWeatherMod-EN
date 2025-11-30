@@ -155,9 +155,9 @@ RefreshMinutes = 30
 ### 获取心知天气 API Key
 
 1. 访问 [心知天气开发者平台](https://www.seniverse.com/)
-2. 注册账号并登录
-3. 创建应用获取免费 API Key
-4. 将 API Key 填入配置文件的 `SeniverseKey` 字段
+2. 注册账号并登录，转到 `控制台` - `产品管理` - `免费版`(如果你是试用版或者其他版本，请选择对应版本)
+3. 在产品管理中找到 **私钥**，复制该密钥
+4. 将该私钥填入配置文件的 `SeniverseKey` 字段，无需添加引号等特殊符号
 5. 设置 `EnableWeatherSync = true` 启用天气同步
 6. 可按需配置刷新时间，避免API调用过于频繁
 
