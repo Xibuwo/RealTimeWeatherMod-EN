@@ -18,6 +18,9 @@
 > 所有代码均由 AI 编写，人工仅作反编译和排错处理。
 > 这是我第一次用 AI 为 Unity 游戏做 MOD，有问题请反馈，虽然反馈了我也是再去找 AI 修就是了🫥
 
+---
+
+关联我写的第二个土豆 mod：[iGPUSaviorMod](https://github.com/Small-tailqwq/iGPUSaviorMod)
 
 
 ## ✨ 主要功能
