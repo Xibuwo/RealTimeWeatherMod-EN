@@ -58,8 +58,13 @@ namespace ChillWithYou.EnvSync.Core
     private System.Random _random = new System.Random();
     private DateTime _lastDailyCheck = DateTime.MinValue;
     private bool _windBellTriggeredToday = false;
+    private bool _windBellRollDoneToday = false;
     private bool _hotSpringTriggeredToday = false;
+    private bool _hotSpringRollDoneToday = false;
     private bool _whaleTriggeredToday = false;
+    private bool _whaleRollDoneToday = false; // 标记今天是否已经抽过鲸鱼
+    private bool _spaceTriggeredToday = false;
+    private bool _spaceRollDoneToday = false;
     private bool _blueButterflyTriggeredToday = false;
     private DateTime _blueButterflyStartTime = DateTime.MinValue;
     
@@ -144,14 +149,25 @@ namespace ChillWithYou.EnvSync.Core
         EnvType = Env_Space,
         Condition = () =>
         {
-          // 每日0.1%概率触发（极低）
           CheckDailyReset();
           if (!IsNight() || !IsGoodWeather()) return false;
           
-          // 已经触发过今天就保持开启条件
-          if (_autoEnabledMods.Contains(Env_Space)) return true;
+          if (_spaceTriggeredToday)
+            return true; // 今天已触发，保持开启
           
-          return _random.NextDouble() < 0.001; // 0.1% 概率
+          // 今天还没抽过，进行一次抽奖
+          if (!_spaceRollDoneToday)
+          {
+            _spaceRollDoneToday = true;
+            
+            if (_random.NextDouble() < 0.01) // 1% 概率（晴朗夜晚前提下，一年约2次）
+            {
+              _spaceTriggeredToday = true;
+              return true;
+            }
+          }
+          
+          return false;
         }
       });
 
@@ -257,10 +273,16 @@ namespace ChillWithYou.EnvSync.Core
           if (_windBellTriggeredToday)
             return true; // 今天已触发，保持开启
           
-          if (_random.NextDouble() < 0.05) // 5%概率
+          // 今天还没抽过，进行一次抽奖
+          if (!_windBellRollDoneToday)
           {
-            _windBellTriggeredToday = true;
-            return true;
+            _windBellRollDoneToday = true;
+            
+            if (_random.NextDouble() < 0.05) // 5%概率
+            {
+              _windBellTriggeredToday = true;
+              return true;
+            }
           }
           
           return false;
@@ -311,15 +333,21 @@ namespace ChillWithYou.EnvSync.Core
           if (_whaleTriggeredToday)
             return true; // 今天已触发，保持开启（无视天气）
           
-          if (_random.NextDouble() < 0.0005) // 0.05%概率
+          // 今天还没抽过，进行一次抽奖
+          if (!_whaleRollDoneToday)
           {
-            _whaleTriggeredToday = true;
-            IsWhaleSystemTriggered = true; // 标记为系统抽中
+            _whaleRollDoneToday = true; // 标记已抽过
             
-            // 不强制切换时段，黄昏和晚上的鲸鱼也很美
-            ChillEnvPlugin.Log?.LogWarning("[鲸鱼彩蛋] 🐋 系统抽中鲸鱼！保持当前时段...");
-            
-            return true;
+            if (_random.NextDouble() < 0.0005) // 0.05%概率
+            {
+              _whaleTriggeredToday = true;
+              IsWhaleSystemTriggered = true; // 标记为系统抽中
+              
+              // 不强制切换时段，黄昏和晚上的鲸鱼也很美
+              ChillEnvPlugin.Log?.LogWarning("[鲸鱼彩蛋] 🐋 系统抽中鲸鱼！保持当前时段...");
+              
+              return true;
+            }
           }
           
           return false;
@@ -539,8 +567,13 @@ namespace ChillWithYou.EnvSync.Core
       {
         _lastDailyCheck = today;
         _windBellTriggeredToday = false;
+        _windBellRollDoneToday = false;
         _hotSpringTriggeredToday = false;
+        _hotSpringRollDoneToday = false;
         _whaleTriggeredToday = false;
+        _whaleRollDoneToday = false;
+        _spaceTriggeredToday = false;
+        _spaceRollDoneToday = false;
         _blueButterflyTriggeredToday = false;
         IsWhaleSystemTriggered = false; // 重置鲸鱼系统触发标志
         ChillEnvPlugin.Log?.LogDebug("[每日重置] 概率触发标志已重置");
