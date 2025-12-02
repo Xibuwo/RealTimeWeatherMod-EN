@@ -165,37 +165,6 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
             }
             catch { return null; }
         }
-
-        private static WeatherInfo ParseOpenWeatherJson(string json)
-{
-    try
-    {
-        // Parse using a simple JsonUtility approach (requires [Serializable] classes)
-        var weatherResponse = JsonUtility.FromJson<OpenWeatherResponse>(json);
-        
-        if (weatherResponse?.current == null) return null;
-        
-        var current = weatherResponse.current;
-        var primaryWeather = current.weather != null && current.weather.Length > 0 ? current.weather[0] : null;
-        
-        int internalCode = MapOpenWeatherIdToInternalCode(primaryWeather?.id ?? 0);
-        string description = primaryWeather?.description ?? "Unknown";
-        
-        return new WeatherInfo
-        {
-            Code = internalCode,
-            Text = CapitalizeFirst(description),
-            Temperature = (int)Math.Round(current.temp),
-            Condition = MapSeniverseCodeToCondition(internalCode),
-            UpdateTime = DateTime.Now
-        };
-    }
-    catch (Exception ex)
-    {
-        ChillEnvPlugin.Log?.LogError($"[OpenWeather Parse] Error: {ex.Message}");
-        return null;
-    }
-}
         private static string CapitalizeFirst(string str)
         {
             if (string.IsNullOrEmpty(str)) return str;
@@ -254,14 +223,19 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
         }
 
         public static IEnumerator FetchSunSchedule(string apiKey, string location, Action<SunData> onComplete)
-        {
-            string provider = ChillEnvPlugin.Cfg_WeatherProvider.Value;
-            
-            if (provider.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase))
-            {
-                yield return FetchSeniverseSunSchedule(apiKey, location, onComplete);
-            }
-        }
+{
+    string provider = ChillEnvPlugin.Cfg_WeatherProvider.Value;
+    
+    if (provider.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase))
+    {
+        // CHANGE: Call the correct method for OpenWeather.
+        yield return FetchOpenWeatherSunSchedule(apiKey, location, onComplete);
+    }
+    else
+    {
+        yield return FetchSeniverseSunSchedule(apiKey, location, onComplete);
+    }
+}
 
         private static IEnumerator FetchSeniverseSunSchedule(string apiKey, string location, Action<SunData> onComplete)
         {
@@ -304,6 +278,48 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
                 }
             }
         }
+        private static IEnumerator FetchOpenWeatherSunSchedule(string apiKey, string location, Action<SunData> onComplete)
+{
+    // Re-use the main weather API call logic to get data.
+    // We'll simply parse the cached weather response if available and recent.
+    if (_cachedWeather != null && (DateTime.Now - _lastFetchTime).TotalMinutes < 5)
+    {
+        // Use a helper to extract sun data from the last API response.
+        // This requires storing the raw JSON or having a shared data object.
+        // For now, we'll make a new call if needed.
+    }
+
+    // Fallback: if no recent cache, make a new call.
+    // The following is a simplified direct call.
+    string[] parts = location.Split(',');
+    if (parts.Length != 2) { onComplete?.Invoke(null); yield break; }
+
+    string lat = parts[0].Trim();
+    string lon = parts[1].Trim();
+    string url = $"https://api.openweathermap.org/data/3.0/onecall?lat={lat}&lon={lon}&appid={apiKey}&exclude=minutely,hourly,daily,alerts";
+
+    using (UnityWebRequest request = UnityWebRequest.Get(url))
+    {
+        request.timeout = 15;
+        yield return request.SendWebRequest();
+
+        if (request.result == UnityWebRequest.Result.Success)
+        {
+            var response = JsonUtility.FromJson<OpenWeatherOneCallResponse>(request.downloadHandler.text);
+            if (response?.current != null)
+            {
+                var sunData = new SunData
+                {
+                    sunrise = DateTimeOffset.FromUnixTimeSeconds(response.current.sunrise).ToLocalTime().ToString("HH:mm"),
+                    sunset = DateTimeOffset.FromUnixTimeSeconds(response.current.sunset).ToLocalTime().ToString("HH:mm")
+                };
+                onComplete?.Invoke(sunData);
+                yield break;
+            }
+        }
+        onComplete?.Invoke(null);
+    }
+}
         private static SunData ParseSeniverseSunJson(string json)
         {
             int sunIndex = json.IndexOf("\"sun\"");
@@ -417,44 +433,23 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
     }
 }
 [System.Serializable]
-public class OpenWeatherResponse
-{
-    public CurrentWeather current;
-}
-
-[System.Serializable]
-public class CurrentWeather
-{
-    public float temp;
-    public WeatherCondition[] weather;
-}
-
-[System.Serializable]
-public class WeatherCondition
-{
-    public int id;
-    public string main;
-    public string description;
-}
-[System.Serializable]
-private class OpenWeatherOneCallResponse
+public class OpenWeatherOneCallResponse
 {
     public CurrentData current;
-    // Daily data would be here if you need it later
 }
 
 [System.Serializable]
-private class CurrentData
+public class CurrentData
 {
-    public long dt; // Timestamp
+    public long dt;
     public long sunrise;
     public long sunset;
     public float temp;
-    public WeatherDescription[] weather;
+    public WeatherDesc[] weather; // Renamed to avoid conflict
 }
 
 [System.Serializable]
-private class WeatherDescription
+public class WeatherDesc // Renamed from WeatherDescription
 {
     public int id;
     public string main;
