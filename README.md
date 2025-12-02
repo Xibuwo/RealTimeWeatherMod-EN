@@ -20,7 +20,7 @@ A BepInEx plugin for *Chill with You – A Lo-Fi Story with You*. It synchronize
 
 Related mod：[iGPUSaviorMod](https://github.com/Small-tailqwq/iGPUSaviorMod)
 
-# 😵‍💫 Fork made by danlok10 
+# 😵‍💫 Fork made by Xibuwo 
 
 ## ✨ Main Features
 
