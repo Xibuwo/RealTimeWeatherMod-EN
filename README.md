@@ -63,9 +63,10 @@ Triggered automatically if seasonal/automation is enabled. Includes seasonal and
 ### Sound Effects
 Also auto-triggered when conditions are met (e.g., cooking sounds, AC noise, cicadas).
 
-### TODO
+### TO-DO
 > 🗒️ Improve and stabilize the mod for OpenWeather API usage.
-> ☀️ Fix dynamic sunset and sunrise, currently off
+> 
+> ☀️ Fix dynamic sunset and sunrise, currently off.
 
 ## 📦 Installation
 
