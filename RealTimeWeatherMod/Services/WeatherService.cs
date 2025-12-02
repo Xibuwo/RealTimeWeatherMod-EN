@@ -89,6 +89,53 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
 {
     if (string.IsNullOrEmpty(apiKey))
     {
+        ChillEnvPlugin.Log?.LogWarning("[API] OpenWeather requires an API Key");
+        onComplete?.Invoke(null);
+        yield break;
+    }
+
+    string finalLocation = location;
+
+    // Check if location is a city name (no comma) rather than coordinates
+    if (!location.Contains(","))
+    {
+        bool geocodingComplete = false;
+        string resolvedCoords = null;
+
+        yield return FetchCoordinatesFromCityName(apiKey, location, (coords) =>
+        {
+            geocodingComplete = true;
+            resolvedCoords = coords;
+        });
+
+        // Wait for the coroutine to finish
+        while (!geocodingComplete)
+            yield return null;
+
+        if (string.IsNullOrEmpty(resolvedCoords))
+        {
+            onComplete?.Invoke(null);
+            yield break;
+        }
+
+        finalLocation = resolvedCoords;
+    }
+
+    string[] parts = finalLocation.Split(',');
+    if (parts.Length != 2)
+    {
+        ChillEnvPlugin.Log?.LogWarning($"[API] Invalid location format: {finalLocation}");
+        onComplete?.Invoke(null);
+        yield break;
+    }
+
+    string lat = parts[0].Trim();
+    string lon = parts[1].Trim();
+    string url = $"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={apiKey}&units=metric";
+}
+{
+    if (string.IsNullOrEmpty(apiKey))
+    {
         // Optional: Add fallback key logic here for consistency with Seniverse
         ChillEnvPlugin.Log?.LogWarning("[API] OpenWeather requires an API Key");
         onComplete?.Invoke(null);
@@ -431,6 +478,55 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
         }
     }
 }
+private static IEnumerator FetchCoordinatesFromCityName(string apiKey, string cityName, Action<string> onComplete)
+{
+    if (string.IsNullOrEmpty(apiKey))
+    {
+        ChillEnvPlugin.Log?.LogWarning("[Geocoding] No API Key provided.");
+        onComplete?.Invoke(null);
+        yield break;
+    }
+
+    string url = $"https://api.openweathermap.org/geo/1.0/direct?q={UnityWebRequest.EscapeURL(cityName)}&limit=1&appid={apiKey}";
+
+    using (UnityWebRequest request = UnityWebRequest.Get(url))
+    {
+        request.timeout = 10;
+        yield return request.SendWebRequest();
+
+        if (request.result != UnityWebRequest.Result.Success || string.IsNullOrEmpty(request.downloadHandler.text))
+        {
+            ChillEnvPlugin.Log?.LogWarning($"[Geocoding] Request failed: {request.error}");
+            onComplete?.Invoke(null);
+            yield break;
+        }
+
+        try
+        {
+            // Manually wrap the JSON array for JsonUtility
+            string wrappedJson = $"{{\"array\":{request.downloadHandler.text}}}";
+            var response = JsonUtility.FromJson<OpenWeatherGeocodingResponseList>(wrappedJson);
+
+            if (response.array != null && response.array.Length > 0)
+            {
+                var location = response.array[0];
+                string coordString = $"{location.lat},{location.lon}";
+                ChillEnvPlugin.Log?.LogInfo($"[Geocoding] Resolved '{cityName}' to {coordString}");
+                onComplete?.Invoke(coordString);
+            }
+            else
+            {
+                ChillEnvPlugin.Log?.LogWarning($"[Geocoding] No results for '{cityName}'.");
+                onComplete?.Invoke(null);
+            }
+        }
+        catch (Exception ex)
+        {
+            ChillEnvPlugin.Log?.LogError($"[Geocoding] Parse error: {ex.Message}");
+            onComplete?.Invoke(null);
+        }
+    }
+}
 [System.Serializable]
 public class OpenWeatherCurrentResponse
 {
@@ -469,4 +565,19 @@ public class WeatherDesc // Renamed from WeatherDescription
     public int id;
     public string main;
     public string description;
+}
+[System.Serializable]
+public class OpenWeatherGeocodingResponse
+{
+    public string name;
+    public float lat;
+    public float lon;
+    public string country;
+}
+
+[System.Serializable]
+public class OpenWeatherGeocodingResponseList
+{
+    public OpenWeatherGeocodingResponse[] array;
+    // JsonUtility needs a wrapper for arrays
 }
