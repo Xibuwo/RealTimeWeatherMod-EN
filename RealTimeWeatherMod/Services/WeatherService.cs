@@ -102,7 +102,7 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
     string lon = parts[1].Trim();
 
     // CHANGE: Use One Call API 3.0 and request only current weather
-    string url = $"https://api.openweathermap.org/data/3.0/onecall?lat={lat}&lon={lon}&appid={apiKey}&units=metric&exclude=minutely,hourly,daily,alerts";
+    string url = $"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={apiKey}";
     ChillEnvPlugin.Log?.LogInfo($"[API] OpenWeather request: {location}");
 
     using (UnityWebRequest request = UnityWebRequest.Get(url))
@@ -120,7 +120,7 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
         try
         {
             // CHANGE: Use the new parser
-            var weather = ParseOpenWeatherJsonOneCall(request.downloadHandler.text);
+            var weather = ParseOpenWeatherJson(request.downloadHandler.text);
             if (weather != null)
             {
                 _cachedWeather = weather;
@@ -296,7 +296,7 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
 
     string lat = parts[0].Trim();
     string lon = parts[1].Trim();
-    string url = $"https://api.openweathermap.org/data/3.0/onecall?lat={lat}&lon={lon}&appid={apiKey}&exclude=minutely,hourly,daily,alerts";
+    string url = $"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={apiKey}";
 
     using (UnityWebRequest request = UnityWebRequest.Get(url))
     {
@@ -305,7 +305,7 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
 
         if (request.result == UnityWebRequest.Result.Success)
         {
-            var response = JsonUtility.FromJson<OpenWeatherOneCallResponse>(request.downloadHandler.text);
+            var response = JsonUtility.FromJson<OpenWeatherCurrentResponse>(request.downloadHandler.text);
             if (response?.current != null)
             {
                 var sunData = new SunData
@@ -366,24 +366,23 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
                 return null;
             }
         }
-        private static WeatherInfo ParseOpenWeatherJsonOneCall(string json)
+        private static WeatherInfo ParseOpenWeatherJson(string json)
 {
     try
     {
-        var response = JsonUtility.FromJson<OpenWeatherOneCallResponse>(json);
-        if (response?.current == null) return null;
+        // Deserialize the response from /data/2.5/weather
+        var response = JsonUtility.FromJson<OpenWeatherCurrentResponse>(json);
+        if (response?.weather == null || response.weather.Length == 0) return null;
 
-        var current = response.current;
-        var primaryWeather = current.weather != null && current.weather.Length > 0 ? current.weather[0] : null;
-
-        int internalCode = MapOpenWeatherIdToInternalCode(primaryWeather?.id ?? 0);
-        string description = primaryWeather?.description ?? "Unknown";
+        var primaryWeather = response.weather[0];
+        int internalCode = MapOpenWeatherIdToInternalCode(primaryWeather.id);
+        string description = primaryWeather.description ?? "Unknown";
 
         return new WeatherInfo
         {
             Code = internalCode,
             Text = CapitalizeFirst(description),
-            Temperature = (int)Math.Round(current.temp),
+            Temperature = (int)Math.Round(response.main.temp),
             Condition = MapSeniverseCodeToCondition(internalCode),
             UpdateTime = DateTime.Now
         };
@@ -433,9 +432,25 @@ private static IEnumerator FetchOpenWeather(string apiKey, string location, Acti
     }
 }
 [System.Serializable]
-public class OpenWeatherOneCallResponse
+public class OpenWeatherCurrentResponse
 {
-    public CurrentData current;
+    public WeatherDesc[] weather;
+    public MainData main;
+    public SysData sys; // For sunrise/sunset if needed elsewhere
+}
+
+[System.Serializable]
+public class MainData
+{
+    public float temp;
+    // ... other fields like humidity, pressure if needed
+}
+
+[System.Serializable]
+public class SysData
+{
+    public long sunrise;
+    public long sunset;
 }
 
 [System.Serializable]
