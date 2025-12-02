@@ -87,15 +87,15 @@ namespace ChillWithYou.EnvSync
 
     private void InitConfig()
     {
-      Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 30, "Weather API refresh interval (minutes)");
+      Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 10, "Weather API refresh interval (minutes)");
       Cfg_SunriseTime = Config.Bind("TimeConfig", "Sunrise", "06:30", "Sunrise time");
       Cfg_SunsetTime = Config.Bind("TimeConfig", "Sunset", "18:30", "Sunset time");
-      Cfg_GeneralAPI = Config.Bind("WeatherAPI", "Seniversekey", "", "General API Key, put your API Key here (Works for Seniverse and OpenWeather");
+      Cfg_GeneralAPI = Config.Bind("WeatherAPI", "GeneralAPI", "", "General API Key, put your API Key here (The GeneralAPI Key is the same as APIKey, which means, you have to put your API on both)");
 
-      Cfg_EnableWeatherSync = Config.Bind("WeatherAPI", "EnableWeatherSync", false, "Enable weather API sync");
-      Cfg_WeatherProvider = Config.Bind("WeatherAPI", "WeatherProvider", "Seniverse", "Weather provider: Seniverse or OpenWeather");
-      Cfg_ApiKey = Config.Bind("WeatherAPI", "ApiKey", "", "API Key (Seniverse or OpenWeather)");
-      Cfg_Location = Config.Bind("WeatherAPI", "Location", "beijing", "Location (city name for Seniverse, or lat,lon for OpenWeather)");
+      Cfg_EnableWeatherSync = Config.Bind("WeatherAPI", "EnableWeatherSync", true, "Enable weather API sync");
+      Cfg_WeatherProvider = Config.Bind("WeatherAPI", "WeatherProvider", "OpenWeather", "Weather provider: Seniverse or OpenWeather");
+      Cfg_ApiKey = Config.Bind("WeatherAPI", "ApiKey", "", "API Key (Same as GeneralAPI, Seniverse or OpenWeather)");
+      Cfg_Location = Config.Bind("WeatherAPI", "Location", "Madrid", "Location (city name for Seniverse and for OpenWeather as well. You can use lon,lat for OpenWeather)");
 
       Cfg_UnlockEnvironments = Config.Bind("Unlock", "UnlockAllEnvironments", true, "Auto unlock environments");
       Cfg_UnlockDecorations = Config.Bind("Unlock", "UnlockAllDecorations", true, "Auto unlock decorations");
