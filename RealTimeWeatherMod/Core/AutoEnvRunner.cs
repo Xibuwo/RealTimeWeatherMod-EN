@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 using Bulbul;
 using ChillWithYou.EnvSync.Models;
@@ -18,12 +18,12 @@ namespace ChillWithYou.EnvSync.Core
         private static readonly EnvironmentType[] SceneryWeathers = new[] { EnvironmentType.ThunderRain, EnvironmentType.HeavyRain, EnvironmentType.LightRain, EnvironmentType.Snow };
         private static readonly EnvironmentType[] MainEnvironments = new[] { EnvironmentType.Day, EnvironmentType.Sunset, EnvironmentType.Night, EnvironmentType.Cloudy, EnvironmentType.LightRain, EnvironmentType.HeavyRain, EnvironmentType.ThunderRain, EnvironmentType.Snow };
 
-        private void Start() 
-        { 
-            _nextWeatherCheckTime = Time.time + 10f; 
-            _nextTimeCheckTime = Time.time + 10f; 
-            ChillEnvPlugin.Log?.LogInfo("Runner 启动..."); 
-            
+        private void Start()
+        {
+            _nextWeatherCheckTime = Time.time + 10f;
+            _nextTimeCheckTime = Time.time + 10f;
+            ChillEnvPlugin.Log?.LogInfo("Runner starting...");
+
             CheckAndSyncSunSchedule();
         }
 
@@ -56,13 +56,13 @@ namespace ChillWithYou.EnvSync.Core
                 {
                     if (data != null)
                     {
-                        ChillEnvPlugin.Log?.LogInfo($"[SunSync] 同步成功: 日出{data.sunrise} 日落{data.sunset}");
-                        
+                        ChillEnvPlugin.Log?.LogInfo($"[SunSync] Sync successful: Sunrise {data.sunrise} Sunset {data.sunset}");
+
                         // Update Config
                         ChillEnvPlugin.Cfg_SunriseTime.Value = data.sunrise;
                         ChillEnvPlugin.Cfg_SunsetTime.Value = data.sunset;
                         ChillEnvPlugin.Cfg_LastSunSyncDate.Value = targetDate;
-                        
+
                         ChillEnvPlugin.Instance.Config.Save();
                         success = true;
                     }
@@ -70,21 +70,21 @@ namespace ChillWithYou.EnvSync.Core
 
                 if (success) yield break;
 
-                ChillEnvPlugin.Log?.LogWarning($"[SunSync] 同步失败，{delay}秒后重试 ({retryCount + 1}/{MaxRetries})");
+                ChillEnvPlugin.Log?.LogWarning($"[SunSync] Sync failed, retrying in {delay} seconds ({retryCount + 1}/{MaxRetries})");
                 yield return new WaitForSeconds(delay);
-                
+
                 delay *= 2f;
                 retryCount++;
             }
-            ChillEnvPlugin.Log?.LogError("[SunSync] 达到最大重试次数，今日放弃同步");
+            ChillEnvPlugin.Log?.LogError("[SunSync] Max retries reached, giving up sync for today.");
         }
 
         private void Update()
         {
             if (!ChillEnvPlugin.Initialized || EnvRegistry.Count == 0) return;
-            if (Input.GetKeyDown(KeyCode.F9)) { ChillEnvPlugin.Log?.LogInfo("F9: 强制同步"); TriggerSync(false, true); }
+            if (Input.GetKeyDown(KeyCode.F9)) { ChillEnvPlugin.Log?.LogInfo("F9: Force Sync"); TriggerSync(false, true); }
             if (Input.GetKeyDown(KeyCode.F8)) ShowStatus();
-            if (Input.GetKeyDown(KeyCode.F7)) { ChillEnvPlugin.Log?.LogInfo("F7: 强制刷新"); ChillEnvPlugin.Instance.Config.Reload(); ForceRefreshWeather(); }
+            if (Input.GetKeyDown(KeyCode.F7)) { ChillEnvPlugin.Log?.LogInfo("F7: Force Refresh"); ChillEnvPlugin.Instance.Config.Reload(); ForceRefreshWeather(); }
             if (Time.time >= _nextTimeCheckTime) { _nextTimeCheckTime = Time.time + 30f; TriggerSync(false, false); }
             if (Time.time >= _nextWeatherCheckTime) { _nextWeatherCheckTime = Time.time + (Mathf.Max(1, ChillEnvPlugin.Cfg_WeatherRefreshMinutes.Value) * 60f); TriggerSync(true, false); }
         }
@@ -92,12 +92,12 @@ namespace ChillWithYou.EnvSync.Core
         private void ShowStatus()
         {
             var now = DateTime.Now;
-            ChillEnvPlugin.Log?.LogInfo($"--- 状态 [{now:HH:mm:ss}] ---");
-            ChillEnvPlugin.Log?.LogInfo($"插件记录: {_lastAppliedEnv}");
+            ChillEnvPlugin.Log?.LogInfo($"--- Status [{now:HH:mm:ss}] ---");
+            ChillEnvPlugin.Log?.LogInfo($"Plugin Log: {_lastAppliedEnv}");
             var currentActive = GetCurrentActiveEnvironment();
-            ChillEnvPlugin.Log?.LogInfo($"游戏实际: {currentActive}");
-            ChillEnvPlugin.Log?.LogInfo($"UI文本: {ChillEnvPlugin.UIWeatherString}");
-            if (ChillEnvPlugin.Cfg_DebugMode.Value) ChillEnvPlugin.Log?.LogWarning("【警告】调试模式已开启！");
+            ChillEnvPlugin.Log?.LogInfo($"Game Actual: {currentActive}");
+            ChillEnvPlugin.Log?.LogInfo($"UI Text: {ChillEnvPlugin.UIWeatherString}");
+            if (ChillEnvPlugin.Cfg_DebugMode.Value) ChillEnvPlugin.Log?.LogWarning("【Warning】Debug mode is ON!");
         }
 
         private void ForceRefreshWeather() { _nextWeatherCheckTime = Time.time + (ChillEnvPlugin.Cfg_WeatherRefreshMinutes.Value * 60f); TriggerSync(true, false); }
@@ -106,7 +106,7 @@ namespace ChillWithYou.EnvSync.Core
         {
             if (ChillEnvPlugin.Cfg_DebugMode.Value)
             {
-                ChillEnvPlugin.Log?.LogWarning("[调试模式] 使用模拟数据...");
+                ChillEnvPlugin.Log?.LogWarning("[Debug Mode] Using mock data...");
                 int mockCode = ChillEnvPlugin.Cfg_DebugCode.Value;
                 var mockWeather = new WeatherInfo { Code = mockCode, Temperature = ChillEnvPlugin.Cfg_DebugTemp.Value, Text = ChillEnvPlugin.Cfg_DebugText.Value, Condition = WeatherService.MapCodeToCondition(mockCode), UpdateTime = DateTime.Now };
                 ApplyEnvironment(mockWeather, forceApply); return;
@@ -122,7 +122,7 @@ namespace ChillWithYou.EnvSync.Core
                     StartCoroutine(WeatherService.FetchWeather(apiKey, location, forceApi, (weather) => {
                         _isFetching = false;
                         if (weather != null) ApplyEnvironment(weather, forceApply);
-                        else { ChillEnvPlugin.Log?.LogWarning("[API异常] 启用时间兜底"); ApplyTimeBasedEnvironment(forceApply); }
+                        else { ChillEnvPlugin.Log?.LogWarning("[API Error] Falling back to time-based environment."); ApplyTimeBasedEnvironment(forceApply); }
                     }));
                 }
                 else { ApplyEnvironment(WeatherService.CachedWeather, forceApply); }
@@ -146,7 +146,7 @@ namespace ChillWithYou.EnvSync.Core
 
         private bool IsBadWeather(int code)
         {
-            // v4.4.1 逻辑：排除太阳雨/雪
+            // v4.4.1 Logic: Exclude sunshowers/snow
             if (code == 10 || code == 13 || code == 21 || code == 22) return false;
             if (code == 4) return true;
             if (code >= 7 && code <= 31) return true;
@@ -178,7 +178,7 @@ namespace ChillWithYou.EnvSync.Core
             foreach (var env in BaseEnvironments) if (env != target && IsEnvironmentActive(env)) SimulateClick(env);
             if (!IsEnvironmentActive(target)) SimulateClick(target);
             ChillEnvPlugin.CallServiceChangeWeather(target);
-            ChillEnvPlugin.Log?.LogInfo($"[环境] 切换至: {target}");
+            ChillEnvPlugin.Log?.LogInfo($"[Environment] Switching to: {target}");
         }
 
         private void ApplyScenery(EnvironmentType? target, bool force)
@@ -187,21 +187,21 @@ namespace ChillWithYou.EnvSync.Core
             {
                 bool shouldBeActive = (target.HasValue && target.Value == env);
                 bool isActive = IsEnvironmentActive(env);
-                if (shouldBeActive && !isActive) { SimulateClick(env); ChillEnvPlugin.Log?.LogInfo($"[景色] 开启: {env}"); }
+                if (shouldBeActive && !isActive) { SimulateClick(env); ChillEnvPlugin.Log?.LogInfo($"[Scenery] Enabling: {env}"); }
                 else if (!shouldBeActive && isActive) { SimulateClick(env); }
             }
         }
 
         private void ApplyEnvironment(WeatherInfo weather, bool force)
         {
-            // 【鲸鱼保护】如果系统抽中的鲸鱼正在开启，跳过所有天气切换
+            // 【Whale Protection】If a system-triggered whale is active, skip all weather changes.
             if (Core.SceneryAutomationSystem.IsWhaleSystemTriggered)
             {
-                ChillEnvPlugin.Log?.LogInfo("[鲸鱼彩蛋] 🐋 系统抽中的鲸鱼生效中，跳过天气切换");
+                ChillEnvPlugin.Log?.LogInfo("[Whale Easter Egg] 🐋 System-triggered whale is active, skipping weather change.");
                 return;
             }
-            
-            if (force || _lastAppliedEnv == null) ChillEnvPlugin.Log?.LogInfo($"[决策] 天气:{weather.Text}(Code:{weather.Code})");
+
+            if (force || _lastAppliedEnv == null) ChillEnvPlugin.Log?.LogInfo($"[Decision] Weather:{weather.Text}(Code:{weather.Code})");
             ChillEnvPlugin.UIWeatherString = $"{weather.Text} {weather.Temperature}°C";
             EnvironmentType baseEnv = GetTimeBasedEnvironment();
             EnvironmentType finalEnv = baseEnv;
@@ -213,13 +213,13 @@ namespace ChillWithYou.EnvSync.Core
 
         private void ApplyTimeBasedEnvironment(bool force)
         {
-            // 【鲸鱼保护】如果系统抽中的鲸鱼正在开启，跳过所有天气切换
+            // 【Whale Protection】If a system-triggered whale is active, skip all weather changes.
             if (Core.SceneryAutomationSystem.IsWhaleSystemTriggered)
             {
-                ChillEnvPlugin.Log?.LogInfo("[鲸鱼彩蛋] 🐋 系统抽中的鲸鱼生效中，跳过天气切换");
+                ChillEnvPlugin.Log?.LogInfo("[Whale Easter Egg] 🐋 System-triggered whale is active, skipping weather change.");
                 return;
             }
-            
+
             ChillEnvPlugin.UIWeatherString = "";
             EnvironmentType targetEnv = GetTimeBasedEnvironment();
             ApplyBaseEnvironment(targetEnv, force);
