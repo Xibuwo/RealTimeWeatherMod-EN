@@ -31,7 +31,7 @@ namespace ChillWithYou.EnvSync
     internal static ConfigEntry<bool> Cfg_UnlockEnvironments;
     internal static ConfigEntry<bool> Cfg_UnlockDecorations;
     internal static ConfigEntry<string> Cfg_WeatherProvider;
-    internal static ConfigEntry<string> Cfg_SeniverseKey;
+    internal static ConfigEntry<string> Cfg_GeneralAPI;
 
     // UI Configuration
     internal static ConfigEntry<bool> Cfg_ShowWeatherOnUI;
@@ -90,7 +90,7 @@ namespace ChillWithYou.EnvSync
       Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 30, "Weather API refresh interval (minutes)");
       Cfg_SunriseTime = Config.Bind("TimeConfig", "Sunrise", "06:30", "Sunrise time");
       Cfg_SunsetTime = Config.Bind("TimeConfig", "Sunset", "18:30", "Sunset time");
-      Cfg_SeniverseKey = Config.Bind("WeatherAPI", "SeniverseKey", "", "Seniverse API Key (if using Seniverse provider)");
+      Cfg_GeneralAPI = Config.Bind("WeatherAPI", "GeneralAPI", "", "General API Key, put your API Key here (Works for Seniverse and OpenWeather");
 
       Cfg_EnableWeatherSync = Config.Bind("WeatherAPI", "EnableWeatherSync", false, "Enable weather API sync");
       Cfg_WeatherProvider = Config.Bind("WeatherAPI", "WeatherProvider", "Seniverse", "Weather provider: Seniverse or OpenWeather");
