@@ -8,7 +8,7 @@ A BepInEx plugin for Chill with You – A Lo-Fi Story with You. It syncs in-game
 
 ---
 
-[![Chill with You](./header_schinese.jpg)](https://store.steampowered.com/app/3548580/)
+[![Chill with You](./CWYLS-EN.jpg)](https://store.steampowered.com/app/3548580/)
 
 > Chill with You Lo-Fi Story is a voiced novel/work-with-me game featuring Satone. You can customize music, ambience, and scenery to build a focused working environment. As your relationship deepens, something special may or may not happen.
 ---
