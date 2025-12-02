@@ -43,7 +43,6 @@ Related mod：[iGPUSaviorMod](https://github.com/Small-tailqwq/iGPUSaviorMod)
 - 💥**Potential conflicts** with future updates or other mods
 - 🧷**External API** relies on third-party weather providers
 - 😵‍💫**AI-written code**：Expect errors, currently testing this version with OpenWeather's API
-- 🔓**OneCall API:** Although OneCall's API is free for the first thousand calls of the day, it requires subscribing to it to be able to utilise that API, therefore, I'm currently making changes for it to be available with OpenWeather's free weather API.
 
 
 ## 🎮 Supported Environment Types
@@ -95,7 +94,7 @@ Select one via the WeatherProvider field:
 | Provider        | Location Format                               | Notes                                    |
 | --------------- | --------------------------------------------- | ---------------------------------------- |
 | **Seniverse**   | City name (e.g., `beijing`, `上海`, `new york`) | Good for Chinese users; lower free quota |
-| **OpenWeather** | `lat,lon` (e.g., `40.7128,-74.0060`)          | Global; 1000/day free quota              |
+| **OpenWeather** | City name or `lat,lon` (e.g., `40.7128,-74.0060`) | 60 calls per minute                    |
 
 
 **Sample Config Snippets**
@@ -113,6 +112,7 @@ EnableWeatherSync = true
 WeatherProvider = OpenWeather
 ApiKey = YOUR_OPENWEATHER_KEY
 Location = 40.7128,-74.0060
+Location = New York City Hall
 
 WeatherSync
 [WeatherSync]
