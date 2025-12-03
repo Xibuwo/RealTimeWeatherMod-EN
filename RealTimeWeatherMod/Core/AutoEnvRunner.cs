@@ -193,11 +193,19 @@ namespace ChillWithYou.EnvSync.Core
         private string FormatTemperature(int tempCelsius)
         {
             string unit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
+            
             if (unit.Equals("Fahrenheit", StringComparison.OrdinalIgnoreCase))
             {
                 int tempFahrenheit = (int)Math.Round(tempCelsius * 9.0 / 5.0 + 32);
                 return $"{tempFahrenheit}°F";
             }
+            else if (unit.Equals("Kelvin", StringComparison.OrdinalIgnoreCase))
+            {
+                int tempKelvin = (int)Math.Round(tempCelsius + 273.15);
+                return $"{tempKelvin}K";
+            }
+            
+            // Default to Celsius
             return $"{tempCelsius}°C";
         }
 
