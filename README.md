@@ -120,6 +120,9 @@ Location = 40.7128,-74.0060
 [WeatherSync]
 RefreshMinutes = 10
 
+[Temperature]
+TemperatureUnit = Celsius
+
 [TimeConfig]
 Sunrise = 06:30
 Sunset = 18:30
