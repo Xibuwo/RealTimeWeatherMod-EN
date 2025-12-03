@@ -44,7 +44,7 @@ namespace ChillWithYou.EnvSync.Core
         {
             int retryCount = 0;
             float delay = 1f;
-            const int MaxRetries = 10; // Max delay ~1024s (17 mins)
+            const int MaxRetries = 10;
 
             while (retryCount < MaxRetries)
             {
@@ -58,7 +58,6 @@ namespace ChillWithYou.EnvSync.Core
                     {
                         ChillEnvPlugin.Log?.LogInfo($"[SunSync] Sync successful: Sunrise {data.sunrise} Sunset {data.sunset}");
 
-                        // Update Config
                         ChillEnvPlugin.Cfg_SunriseTime.Value = data.sunrise;
                         ChillEnvPlugin.Cfg_SunsetTime.Value = data.sunset;
                         ChillEnvPlugin.Cfg_LastSunSyncDate.Value = targetDate;
@@ -146,7 +145,6 @@ namespace ChillWithYou.EnvSync.Core
 
         private bool IsBadWeather(int code)
         {
-            // v4.4.1 Logic: Exclude sunshowers/snow
             if (code == 10 || code == 13 || code == 21 || code == 22) return false;
             if (code == 4) return true;
             if (code >= 7 && code <= 31) return true;
@@ -192,9 +190,19 @@ namespace ChillWithYou.EnvSync.Core
             }
         }
 
+        private string FormatTemperature(int tempCelsius)
+        {
+            string unit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
+            if (unit.Equals("Fahrenheit", StringComparison.OrdinalIgnoreCase))
+            {
+                int tempFahrenheit = (int)Math.Round(tempCelsius * 9.0 / 5.0 + 32);
+                return $"{tempFahrenheit}°F";
+            }
+            return $"{tempCelsius}°C";
+        }
+
         private void ApplyEnvironment(WeatherInfo weather, bool force)
         {
-            // 【Whale Protection】If a system-triggered whale is active, skip all weather changes.
             if (Core.SceneryAutomationSystem.IsWhaleSystemTriggered)
             {
                 ChillEnvPlugin.Log?.LogInfo("[Whale Easter Egg] 🐋 System-triggered whale is active, skipping weather change.");
@@ -202,7 +210,7 @@ namespace ChillWithYou.EnvSync.Core
             }
 
             if (force || _lastAppliedEnv == null) ChillEnvPlugin.Log?.LogInfo($"[Decision] Weather:{weather.Text}(Code:{weather.Code})");
-            ChillEnvPlugin.UIWeatherString = $"{weather.Text} {weather.Temperature}°C";
+            ChillEnvPlugin.UIWeatherString = $"{weather.Text} {FormatTemperature(weather.Temperature)}";
             EnvironmentType baseEnv = GetTimeBasedEnvironment();
             EnvironmentType finalEnv = baseEnv;
             if (IsBadWeather(weather.Code)) { if (baseEnv != EnvironmentType.Night) finalEnv = EnvironmentType.Cloudy; }
@@ -213,7 +221,6 @@ namespace ChillWithYou.EnvSync.Core
 
         private void ApplyTimeBasedEnvironment(bool force)
         {
-            // 【Whale Protection】If a system-triggered whale is active, skip all weather changes.
             if (Core.SceneryAutomationSystem.IsWhaleSystemTriggered)
             {
                 ChillEnvPlugin.Log?.LogInfo("[Whale Easter Egg] 🐋 System-triggered whale is active, skipping weather change.");
