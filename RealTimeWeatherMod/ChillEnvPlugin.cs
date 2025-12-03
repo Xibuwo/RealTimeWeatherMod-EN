@@ -37,7 +37,6 @@ namespace ChillWithYou.EnvSync
     internal static ConfigEntry<bool> Cfg_ShowWeatherOnUI;
     internal static ConfigEntry<bool> Cfg_DetailedTimeSegments;
     internal static ConfigEntry<string> Cfg_TemperatureUnit;
-    internal static ConfigEntry<string> Cfg_DateFormat;
 
     internal static ConfigEntry<bool> Cfg_EnableEasterEggs;
 
@@ -104,7 +103,7 @@ namespace ChillWithYou.EnvSync
 
       Cfg_ShowWeatherOnUI = Config.Bind("UI", "ShowWeatherOnDate", true, "Show weather on date bar");
       Cfg_DetailedTimeSegments = Config.Bind("UI", "DetailedTimeSegments", true, "Show detailed time segments in 12-hour format");
-      Cfg_TemperatureUnit = Config.Bind("UI", "TemperatureUnit", "Celsius", "Temperature unit: Celsius or Fahrenheit");
+      Cfg_TemperatureUnit = Config.Bind("UI", "TemperatureUnit", "Celsius", "Temperature unit: Celsius, Fahrenheit, or Kelvin");
       
       Cfg_EnableEasterEggs = Config.Bind("Automation", "EnableSeasonalEasterEggs", true, "Enable seasonal easter eggs & automatic environment sound management");
 
