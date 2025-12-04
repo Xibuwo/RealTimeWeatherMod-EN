@@ -301,7 +301,7 @@ MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## 👨‍💻 Contributor
 
-- Github: [@danlok10](https://github.com/danlok10)
+- Github: [@xibuwo](https://github.com/xibuwo)
 
 ## 🙏 Acknowledgments
 
