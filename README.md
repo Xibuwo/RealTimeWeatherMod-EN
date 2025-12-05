@@ -85,6 +85,9 @@ Also auto-triggered when conditions are met (e.g., cooking sounds, AC noise, cic
 
 After the first run, a configuration file is generated here: `BepInEx/config/chillwithyou.envsync.cfg`
 
+**Optional**: If you have [iGPU Savior](https://github.com/Small-tailqwq/iGPUSaviorMod) installed, 
+some settings will also appear in the in-game MOD Settings tab for convenience.
+
 ### Weather API Providers
 This fork supports both Seniverse and OpenWeather. Select one using the `WeatherProvider` field.
 
