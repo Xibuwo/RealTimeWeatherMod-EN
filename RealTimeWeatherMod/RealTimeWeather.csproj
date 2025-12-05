@@ -96,7 +96,7 @@
     <Compile Include="Models\SunResponse.cs" />
     <Compile Include="Models\WeatherData.cs" />
     <Compile Include="Patches\HarmonyPatches.cs" />
-    <Compile Include="Patches\ModSettingsIntegration.cs" />
+    <Compile Include="UI\WeatherModSettingsUI.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Services\KeySecurity.cs" />
     <Compile Include="Services\WeatherService.cs" />
