@@ -16,6 +16,7 @@ namespace ChillWithYou.EnvSync.UI
         private static InteractableUI modInteractableUI;
         private static SettingUI cachedSettingUI;
         private static Canvas _rootCanvas;
+        private static bool _integratedWithIGPU = false;
 
         static void Postfix(SettingUI __instance)
         {
@@ -24,16 +25,236 @@ namespace ChillWithYou.EnvSync.UI
                 cachedSettingUI = __instance;
                 _rootCanvas = __instance.GetComponentInParent<Canvas>() ?? Object.FindObjectOfType<Canvas>();
 
-                CreateModSettingsTab(__instance);
-                HookIntoTabButtons(__instance);
+                // Delay to allow iGPU Savior's ModSettingsManager to initialize first
+                WeatherModUIRunner.Instance.RunDelayed(0.8f, () =>
+                {
+                    // Check if ModSettingsManager exists (iGPU Savior is installed)
+                    if (TryIntegrateWithIGPU())
+                    {
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Detected iGPU Savior - integrating into shared MOD tab");
+                        _integratedWithIGPU = true;
+                        return;
+                    }
 
-                modContentParent?.SetActive(false);
+                    // Fallback: Create standalone tab if iGPU Savior is not present
+                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Running in standalone mode");
+                    CreateModSettingsTab(__instance);
+                    HookIntoTabButtons(__instance);
+                    modContentParent?.SetActive(false);
+                });
             }
             catch (System.Exception e)
             {
                 ChillEnvPlugin.Log?.LogError($"Weather MOD UI integration failed: {e.Message}\n{e.StackTrace}");
             }
         }
+
+        /// <summary>
+        /// Try to integrate with iGPU Savior's ModSettingsManager
+        /// </summary>
+        static bool TryIntegrateWithIGPU()
+        {
+            try
+            {
+                // Use reflection to find ModSettingsManager
+                var allTypes = System.AppDomain.CurrentDomain.GetAssemblies()
+                    .SelectMany(a => {
+                        try { return a.GetTypes(); }
+                        catch { return new System.Type[0]; }
+                    });
+
+                var managerType = allTypes.FirstOrDefault(t =>
+                    t.Name == "ModSettingsManager" && t.Namespace == "ModShared");
+
+                if (managerType == null)
+                {
+                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager type not found - iGPU Savior not installed");
+                    return false;
+                }
+
+                // Get the Instance property
+                var instanceProp = managerType.GetProperty("Instance",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+
+                if (instanceProp == null)
+                {
+                    ChillEnvPlugin.Log?.LogWarning("[Weather MOD] ModSettingsManager.Instance property not found");
+                    return false;
+                }
+
+                var managerInstance = instanceProp.GetValue(null);
+                if (managerInstance == null)
+                {
+                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager instance is null - not yet initialized, waiting longer...");
+                    // Try again after another delay
+                    WeatherModUIRunner.Instance.RunDelayed(1.5f, () => RetryIntegration());
+                    return false;
+                }
+
+                // Check if IsInitialized
+                var initProp = managerType.GetProperty("IsInitialized");
+                if (initProp != null)
+                {
+                    bool isInit = (bool)initProp.GetValue(managerInstance);
+                    if (!isInit)
+                    {
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager not yet initialized, retrying...");
+                        WeatherModUIRunner.Instance.RunDelayed(1.5f, () => RetryIntegration());
+                        return false;
+                    }
+                }
+
+                RegisterWithIGPU(managerInstance, managerType);
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Integration check failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Retry integration if initial attempt failed due to timing
+        /// </summary>
+        static void RetryIntegration()
+        {
+            if (_integratedWithIGPU)
+                return; // Already integrated
+
+            if (TryIntegrateWithIGPU())
+            {
+                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Successfully integrated with iGPU Savior on retry");
+                _integratedWithIGPU = true;
+            }
+            else
+            {
+                // Final fallback - create standalone UI
+                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Integration failed after retries, creating standalone tab");
+                CreateModSettingsTab(cachedSettingUI);
+                HookIntoTabButtons(cachedSettingUI);
+                modContentParent?.SetActive(false);
+            }
+        }
+
+        /// <summary>
+        /// Register weather mod settings with iGPU Savior's ModSettingsManager
+        /// </summary>
+        static void RegisterWithIGPU(object managerInstance, System.Type managerType)
+        {
+            try
+            {
+                // Check if UI is currently being built
+                var isBuildingField = managerType.GetField("_isBuildingUI",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+                if (isBuildingField != null)
+                {
+                    bool isBuilding = (bool)isBuildingField.GetValue(managerInstance);
+                    if (isBuilding)
+                    {
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager is currently building UI, waiting...");
+                        WeatherModUIRunner.Instance.RunDelayed(0.5f, () => RegisterWithIGPU(managerInstance, managerType));
+                        return;
+                    }
+                }
+
+                // Register the mod
+                var registerMethod = managerType.GetMethod("RegisterMod");
+                if (registerMethod != null)
+                {
+                    registerMethod.Invoke(managerInstance, new object[] { "Chill Env Sync", "5.2.1" });
+                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Registered with ModSettingsManager");
+                }
+
+                // Add toggles
+                var addToggleMethod = managerType.GetMethod("AddToggle");
+                if (addToggleMethod != null)
+                {
+                    // Weather Settings
+                    addToggleMethod.Invoke(managerInstance, new object[] {
+                        "Enable Weather API Sync",
+                        ChillEnvPlugin.Cfg_EnableWeatherSync.Value,
+                        (System.Action<bool>)((val) => {
+                            ChillEnvPlugin.Cfg_EnableWeatherSync.Value = val;
+                            ChillEnvPlugin.Instance.Config.Save();
+                        })
+                    });
+
+                    addToggleMethod.Invoke(managerInstance, new object[] {
+                        "Show Weather on Date Bar",
+                        ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value,
+                        (System.Action<bool>)((val) => {
+                            ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value = val;
+                            ChillEnvPlugin.Instance.Config.Save();
+                        })
+                    });
+
+                    addToggleMethod.Invoke(managerInstance, new object[] {
+                        "Show Detailed Time Segments",
+                        ChillEnvPlugin.Cfg_DetailedTimeSegments.Value,
+                        (System.Action<bool>)((val) => {
+                            ChillEnvPlugin.Cfg_DetailedTimeSegments.Value = val;
+                            ChillEnvPlugin.Instance.Config.Save();
+                        })
+                    });
+
+                    // Features
+                    addToggleMethod.Invoke(managerInstance, new object[] {
+                        "Enable Seasonal Easter Eggs",
+                        ChillEnvPlugin.Cfg_EnableEasterEggs.Value,
+                        (System.Action<bool>)((val) => {
+                            ChillEnvPlugin.Cfg_EnableEasterEggs.Value = val;
+                            ChillEnvPlugin.Instance.Config.Save();
+                        })
+                    });
+
+                    addToggleMethod.Invoke(managerInstance, new object[] {
+                        "Unlock All Environments",
+                        ChillEnvPlugin.Cfg_UnlockEnvironments.Value,
+                        (System.Action<bool>)((val) => {
+                            ChillEnvPlugin.Cfg_UnlockEnvironments.Value = val;
+                            ChillEnvPlugin.Instance.Config.Save();
+                            ChillEnvPlugin.Log?.LogWarning("Please restart the game for environment unlock changes to take effect");
+                        })
+                    });
+
+                    addToggleMethod.Invoke(managerInstance, new object[] {
+                        "Unlock All Decorations",
+                        ChillEnvPlugin.Cfg_UnlockDecorations.Value,
+                        (System.Action<bool>)((val) => {
+                            ChillEnvPlugin.Cfg_UnlockDecorations.Value = val;
+                            ChillEnvPlugin.Instance.Config.Save();
+                            ChillEnvPlugin.Log?.LogWarning("Please restart the game for decoration unlock changes to take effect");
+                        })
+                    });
+                }
+
+                // Trigger UI rebuild with a small delay to ensure all registrations are complete
+                WeatherModUIRunner.Instance.RunDelayed(0.2f, () =>
+                {
+                    var rebuildMethod = managerType.GetMethod("RebuildUI");
+                    if (rebuildMethod != null && cachedSettingUI != null)
+                    {
+                        // Find the MOD content parent (should be created by iGPU Savior)
+                        var modContent = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
+                        if (modContent != null)
+                        {
+                            rebuildMethod.Invoke(managerInstance, new object[] { modContent, cachedSettingUI.transform });
+                            ChillEnvPlugin.Log?.LogInfo("[Weather MOD] UI rebuilt successfully");
+                        }
+                    }
+                });
+
+                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Successfully integrated with iGPU Savior");
+            }
+            catch (System.Exception ex)
+            {
+                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Registration failed: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        // === STANDALONE MODE METHODS (used when iGPU Savior is not present) ===
 
         static void CreateModSettingsTab(SettingUI settingUI)
         {
@@ -95,8 +316,8 @@ namespace ChillWithYou.EnvSync.UI
 
             var vGroup = content.GetComponent<VerticalLayoutGroup>() ?? content.AddComponent<VerticalLayoutGroup>();
             vGroup.spacing = 16f;
-            vGroup.padding = new RectOffset(40, 40, 20, 20); // Reduced left padding from 60 to 40
-            vGroup.childAlignment = TextAnchor.UpperCenter; // Changed from UpperLeft to UpperCenter
+            vGroup.padding = new RectOffset(40, 40, 20, 20);
+            vGroup.childAlignment = TextAnchor.UpperCenter;
             vGroup.childControlHeight = false;
             vGroup.childControlWidth = true;
             vGroup.childForceExpandHeight = false;
@@ -113,14 +334,11 @@ namespace ChillWithYou.EnvSync.UI
             {
                 if (content == null || settingUI == null) return;
 
-                // Create header
                 CreateSectionHeader(content.transform, "Chill Env Sync", "5.2.1");
 
-                // Get the audio tab to clone toggle style
                 Transform audioTabContent = settingUI.transform.Find("MusicAudio/ScrollView/Viewport/Content");
                 if (audioTabContent == null) return;
 
-                // Find the Pomodoro toggle as template
                 Transform originalRow = null;
                 foreach (Transform child in audioTabContent)
                 {
@@ -133,7 +351,6 @@ namespace ChillWithYou.EnvSync.UI
 
                 if (originalRow == null) return;
 
-                // === Weather Settings Section ===
                 CreateSubHeader(content.transform, "Weather & Time");
 
                 CreateToggle(content.transform, originalRow, "Enable Weather API Sync",
@@ -156,7 +373,7 @@ namespace ChillWithYou.EnvSync.UI
                         ChillEnvPlugin.Cfg_DetailedTimeSegments.Value = val;
                         ChillEnvPlugin.Instance.Config.Save();
                     });
-                // === Features Section ===
+
                 CreateSubHeader(content.transform, "Features (Must restart game)");
 
                 CreateToggle(content.transform, originalRow, "Enable Seasonal Easter Eggs",
@@ -182,7 +399,6 @@ namespace ChillWithYou.EnvSync.UI
                         ChillEnvPlugin.Log?.LogWarning("Please restart the game for decoration unlock changes to take effect");
                     });
 
-                // Force layout rebuild
                 LayoutRebuilder.ForceRebuildLayoutImmediate(content.GetComponent<RectTransform>());
             });
         }
@@ -222,7 +438,7 @@ namespace ChillWithYou.EnvSync.UI
             var tmp = obj.AddComponent<TextMeshProUGUI>();
             string verStr = string.IsNullOrEmpty(version) ? "" : $" <size=16><color=#888888>v{version}</color></size>";
             tmp.text = $"<size=20><b>{name}</b></size>{verStr}";
-            tmp.alignment = TextAlignmentOptions.Center; // Center alignment
+            tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
         }
 
@@ -233,26 +449,21 @@ namespace ChillWithYou.EnvSync.UI
             toggleRow.transform.SetParent(parent, false);
             toggleRow.SetActive(true);
 
-            // Add LayoutElement to control width
             var layoutElement = toggleRow.GetComponent<LayoutElement>();
             if (layoutElement == null)
                 layoutElement = toggleRow.AddComponent<LayoutElement>();
 
-            layoutElement.preferredWidth = 800f; // Fixed width for consistency
+            layoutElement.preferredWidth = 800f;
             layoutElement.minWidth = 800f;
 
-            // Update label
             var titleTexts = toggleRow.GetComponentsInChildren<TMP_Text>(true);
             if (titleTexts.Length > 0)
             {
                 var sortedTexts = titleTexts.OrderBy(t => t.transform.position.x).ToArray();
                 sortedTexts[0].text = label;
-
-                // Ensure label has proper alignment
                 sortedTexts[0].alignment = TextAlignmentOptions.MidlineLeft;
             }
 
-            // Setup buttons
             Button[] buttons = toggleRow.GetComponentsInChildren<Button>(true);
             if (buttons.Length < 2) return;
 
