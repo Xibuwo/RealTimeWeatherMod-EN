@@ -269,10 +269,10 @@ namespace ChillWithYou.EnvSync.UI
                             rebuildMethod.Invoke(managerInstance, new object[] { modContent, cachedSettingUI.transform });
                             ChillEnvPlugin.Log?.LogInfo("[Weather MOD] UI rebuilt successfully");
 
-                            // === FORCE TITLE UPDATE START ===
+                            // === FORCE TITLE UPDATE + CENTER CONTENT ===
                             try
                             {
-                                // Attempt to find the Title object created by iGPU Savior
+                                // Update title
                                 var modSettingsRoot = cachedSettingUI.transform.Find("ModSettingsContent");
                                 if (modSettingsRoot != null)
                                 {
@@ -284,18 +284,32 @@ namespace ChillWithYou.EnvSync.UI
                                         {
                                             // Center the text
                                             tmp.alignment = TextAlignmentOptions.Center;
-                                            // Set the combined title
-                                            tmp.text = "<size=20><b>Chill Env Sync (iGPU Savior Active)</b></size>\n<size=16><color=#888888>v5.2.1 + 1.6.0</color></size>";
+                                            // Set the combined title with version on same line
+                                            tmp.text = "<size=20><b>Chill Env Sync (iGPU Savior Active) <color=#888888>v5.2.1 + 1.6.0</color></b></size>";
                                             ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Title forcibly updated and centered");
                                         }
                                     }
                                 }
+
+                                // *** NEW: CENTER ALL CONTENT ***
+                                if (modContent != null)
+                                {
+                                    var vGroup = modContent.GetComponent<VerticalLayoutGroup>();
+                                    if (vGroup != null)
+                                    {
+                                        vGroup.childAlignment = TextAnchor.UpperCenter;
+                                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Content centered");
+                                    }
+
+                                    // Force rebuild layout
+                                    LayoutRebuilder.ForceRebuildLayoutImmediate(modContent as RectTransform);
+                                }
                             }
                             catch (System.Exception ex)
                             {
-                                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Failed to update title: {ex.Message}");
+                                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Failed to update title/center: {ex.Message}");
                             }
-                            // === FORCE TITLE UPDATE END ===
+                            // === END UPDATE ===
                         }
                     }
                 });
@@ -371,7 +385,7 @@ namespace ChillWithYou.EnvSync.UI
             var vGroup = content.GetComponent<VerticalLayoutGroup>() ?? content.AddComponent<VerticalLayoutGroup>();
             vGroup.spacing = 16f;
             vGroup.padding = new RectOffset(40, 40, 20, 20);
-            vGroup.childAlignment = TextAnchor.UpperCenter;
+            vGroup.childAlignment = TextAnchor.UpperCenter; // CENTER ALIGNMENT
             vGroup.childControlHeight = false;
             vGroup.childControlWidth = true;
             vGroup.childForceExpandHeight = false;
@@ -388,6 +402,7 @@ namespace ChillWithYou.EnvSync.UI
             {
                 if (content == null || settingUI == null) return;
 
+                // Version on same line as title
                 CreateSectionHeader(content.transform, "Chill Env Sync", "5.2.1");
 
                 Transform audioTabContent = settingUI.transform.Find("MusicAudio/ScrollView/Viewport/Content");
@@ -580,7 +595,7 @@ namespace ChillWithYou.EnvSync.UI
                     // Set initial selected text
                     UpdateDropdownSelectedText(dropdown, tempOptions[currentIndex]);
 
-                    // Configure dropdown UI component
+                    // Configure dropdown UI component WITH HIGHER Z-ORDER
                     ConfigureDropdownUI(dropdown, originalDropdown, content);
                 }
 
@@ -614,7 +629,6 @@ namespace ChillWithYou.EnvSync.UI
         {
             try
             {
-                // FIX: Changed GetComponentInChildren to GetComponentsInChildren to handle FirstOrDefault correctly
                 var pulldownUI = dropdown.GetComponentsInChildren<Component>(true)
                     .FirstOrDefault(c => c.GetType().Name == "PulldownListUI");
 
@@ -699,23 +713,21 @@ namespace ChillWithYou.EnvSync.UI
                     contentRect.anchoredPosition = Vector2.zero;
                 }
 
-                // Add Canvas to root to ensure Sorting over subsequent elements
+                // *** FIX: Add Canvas with HIGH sorting order to dropdown root ***
                 Canvas rootCanvas = dropdown.GetComponent<Canvas>();
                 if (rootCanvas == null)
                 {
                     rootCanvas = dropdown.AddComponent<Canvas>();
-                    // FIX: Set overrideSorting to true and a high order to make the dropdown overlay other UI elements
                     rootCanvas.overrideSorting = true;
-                    rootCanvas.sortingOrder = 30000;
+                    rootCanvas.sortingOrder = 40000; // Higher than toggles below
 
                     if (dropdown.GetComponent<GraphicRaycaster>() == null)
                         dropdown.AddComponent<GraphicRaycaster>();
                 }
                 else
                 {
-                    // Update existing canvas if present
                     rootCanvas.overrideSorting = true;
-                    rootCanvas.sortingOrder = 30000;
+                    rootCanvas.sortingOrder = 40000; // Ensure high order
                 }
 
                 // Set fields
@@ -751,7 +763,7 @@ namespace ChillWithYou.EnvSync.UI
 
             var tmp = obj.AddComponent<TextMeshProUGUI>();
             tmp.text = $"<size=16><color=#AAAAAA>{text}</color></size>";
-            tmp.alignment = TextAlignmentOptions.MidlineLeft;
+            tmp.alignment = TextAlignmentOptions.Center; // CENTERED
             tmp.color = new Color(0.67f, 0.67f, 0.67f, 1f);
         }
 
@@ -769,6 +781,7 @@ namespace ChillWithYou.EnvSync.UI
             le.flexibleWidth = 1f;
 
             var tmp = obj.AddComponent<TextMeshProUGUI>();
+            // VERSION ON SAME LINE
             string verStr = string.IsNullOrEmpty(version) ? "" : $" <size=16><color=#888888>v{version}</color></size>";
             tmp.text = $"<size=20><b>{name}</b></size>{verStr}";
             tmp.alignment = TextAlignmentOptions.Center;
@@ -794,7 +807,7 @@ namespace ChillWithYou.EnvSync.UI
             {
                 var sortedTexts = titleTexts.OrderBy(t => t.transform.position.x).ToArray();
                 sortedTexts[0].text = label;
-                sortedTexts[0].alignment = TextAlignmentOptions.MidlineLeft;
+                sortedTexts[0].alignment = TextAlignmentOptions.MidlineLeft; // Keep left-aligned for toggles
             }
 
             Button[] buttons = toggleRow.GetComponentsInChildren<Button>(true);
