@@ -113,10 +113,37 @@ namespace ChillWithYou.EnvSync.UI
                 return false;
             }
         }
-
         /// <summary>
-        /// Retry integration if initial attempt failed due to timing
+        /// Trigger F7-like force refresh (reload config and force weather sync)
         /// </summary>
+        static void TriggerForceRefresh()
+        {
+            try
+            {
+                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Force refresh triggered by temperature unit change");
+
+                // Reload config
+                ChillEnvPlugin.Instance.Config.Reload();
+
+                // Find AutoEnvRunner and trigger force sync
+                var runner = Object.FindObjectOfType<Core.AutoEnvRunner>();
+                if (runner != null)
+                {
+                    // Use reflection to call ForceRefreshWeather method
+                    var method = runner.GetType().GetMethod("ForceRefreshWeather",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (method != null)
+                    {
+                        method.Invoke(runner, null);
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Weather data force refreshed");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Force refresh failed: {ex.Message}");
+            }
+        }
         static void RetryIntegration()
         {
             if (_integratedWithIGPU)
@@ -164,7 +191,7 @@ namespace ChillWithYou.EnvSync.UI
                 if (registerMethod != null)
                 {
                     // Register with the combined name
-                    registerMethod.Invoke(managerInstance, new object[] { "Chill Env Sync (iGPU Savior Active)", "5.2.1 + 1.6.0" });
+                    registerMethod.Invoke(managerInstance, new object[] { "Chill Env Sync", "5.2.1" });
                     ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Registered with ModSettingsManager");
                 }
 
@@ -189,6 +216,8 @@ namespace ChillWithYou.EnvSync.UI
                             ChillEnvPlugin.Cfg_TemperatureUnit.Value = units[index];
                             ChillEnvPlugin.Instance.Config.Save();
                             ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Temperature unit changed to: {units[index]}");
+
+                            TriggerForceRefresh();
                         })
                     });
                 }
@@ -579,6 +608,7 @@ namespace ChillWithYou.EnvSync.UI
                                 UpdateDropdownSelectedText(dropdown, tempOptions[index]);
                                 CloseDropdown(dropdown);
                                 PlayClickSound();
+                                TriggerForceRefresh();
                             });
 
                             if (!button.interactable) button.interactable = true;
