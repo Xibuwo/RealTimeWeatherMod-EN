@@ -163,6 +163,7 @@ namespace ChillWithYou.EnvSync.UI
                 var registerMethod = managerType.GetMethod("RegisterMod");
                 if (registerMethod != null)
                 {
+                    // Register with the combined name
                     registerMethod.Invoke(managerInstance, new object[] { "Chill Env Sync (iGPU Savior Active)", "5.2.1 + 1.6.0" });
                     ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Registered with ModSettingsManager");
                 }
@@ -255,7 +256,7 @@ namespace ChillWithYou.EnvSync.UI
                     });
                 }
 
-                // Trigger UI rebuild with a small delay to ensure all registrations are complete
+                // Trigger UI rebuild and FORCE TITLE UPDATE
                 WeatherModUIRunner.Instance.RunDelayed(0.2f, () =>
                 {
                     var rebuildMethod = managerType.GetMethod("RebuildUI");
@@ -267,6 +268,34 @@ namespace ChillWithYou.EnvSync.UI
                         {
                             rebuildMethod.Invoke(managerInstance, new object[] { modContent, cachedSettingUI.transform });
                             ChillEnvPlugin.Log?.LogInfo("[Weather MOD] UI rebuilt successfully");
+
+                            // === FORCE TITLE UPDATE START ===
+                            try
+                            {
+                                // Attempt to find the Title object created by iGPU Savior
+                                var modSettingsRoot = cachedSettingUI.transform.Find("ModSettingsContent");
+                                if (modSettingsRoot != null)
+                                {
+                                    var titleTrans = modSettingsRoot.Find("Title");
+                                    if (titleTrans != null)
+                                    {
+                                        var tmp = titleTrans.GetComponent<TextMeshProUGUI>();
+                                        if (tmp != null)
+                                        {
+                                            // Center the text
+                                            tmp.alignment = TextAlignmentOptions.Center;
+                                            // Set the combined title
+                                            tmp.text = "<size=20><b>Chill Env Sync (iGPU Savior Active)</b></size>\n<size=16><color=#888888>v5.2.1 + 1.6.0</color></size>";
+                                            ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Title forcibly updated and centered");
+                                        }
+                                    }
+                                }
+                            }
+                            catch (System.Exception ex)
+                            {
+                                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Failed to update title: {ex.Message}");
+                            }
+                            // === FORCE TITLE UPDATE END ===
                         }
                     }
                 });
@@ -585,7 +614,7 @@ namespace ChillWithYou.EnvSync.UI
         {
             try
             {
-                // Find PulldownListUI component
+                // FIX: Changed GetComponentInChildren to GetComponentsInChildren to handle FirstOrDefault correctly
                 var pulldownUI = dropdown.GetComponentsInChildren<Component>(true)
                     .FirstOrDefault(c => c.GetType().Name == "PulldownListUI");
 
@@ -670,16 +699,23 @@ namespace ChillWithYou.EnvSync.UI
                     contentRect.anchoredPosition = Vector2.zero;
                 }
 
-                // Add Canvas to root
+                // Add Canvas to root to ensure Sorting over subsequent elements
                 Canvas rootCanvas = dropdown.GetComponent<Canvas>();
                 if (rootCanvas == null)
                 {
                     rootCanvas = dropdown.AddComponent<Canvas>();
-                    rootCanvas.overrideSorting = false;
-                    rootCanvas.sortingOrder = 0;
+                    // FIX: Set overrideSorting to true and a high order to make the dropdown overlay other UI elements
+                    rootCanvas.overrideSorting = true;
+                    rootCanvas.sortingOrder = 30000;
 
                     if (dropdown.GetComponent<GraphicRaycaster>() == null)
                         dropdown.AddComponent<GraphicRaycaster>();
+                }
+                else
+                {
+                    // Update existing canvas if present
+                    rootCanvas.overrideSorting = true;
+                    rootCanvas.sortingOrder = 30000;
                 }
 
                 // Set fields
