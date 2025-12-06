@@ -25,10 +25,8 @@ namespace ChillWithYou.EnvSync.UI
                 cachedSettingUI = __instance;
                 _rootCanvas = __instance.GetComponentInParent<Canvas>() ?? Object.FindObjectOfType<Canvas>();
 
-                // Delay to allow iGPU Savior's ModSettingsManager to initialize first
                 WeatherModUIRunner.Instance.RunDelayed(0.8f, () =>
                 {
-                    // Check if ModSettingsManager exists (iGPU Savior is installed)
                     if (TryIntegrateWithIGPU())
                     {
                         ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Detected iGPU Savior - integrating into shared MOD tab");
@@ -36,7 +34,6 @@ namespace ChillWithYou.EnvSync.UI
                         return;
                     }
 
-                    // Fallback: Create standalone tab if iGPU Savior is not present
                     ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Running in standalone mode");
                     CreateModSettingsTab(__instance);
                     HookIntoTabButtons(__instance);
@@ -49,14 +46,10 @@ namespace ChillWithYou.EnvSync.UI
             }
         }
 
-        /// <summary>
-        /// Try to integrate with iGPU Savior's ModSettingsManager
-        /// </summary>
         static bool TryIntegrateWithIGPU()
         {
             try
             {
-                // Use reflection to find ModSettingsManager
                 var allTypes = System.AppDomain.CurrentDomain.GetAssemblies()
                     .SelectMany(a => {
                         try { return a.GetTypes(); }
@@ -72,7 +65,6 @@ namespace ChillWithYou.EnvSync.UI
                     return false;
                 }
 
-                // Get the Instance property
                 var instanceProp = managerType.GetProperty("Instance",
                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
 
@@ -86,12 +78,10 @@ namespace ChillWithYou.EnvSync.UI
                 if (managerInstance == null)
                 {
                     ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager instance is null - not yet initialized, waiting longer...");
-                    // Try again after another delay
                     WeatherModUIRunner.Instance.RunDelayed(1.5f, () => RetryIntegration());
                     return false;
                 }
 
-                // Check if IsInitialized
                 var initProp = managerType.GetProperty("IsInitialized");
                 if (initProp != null)
                 {
@@ -113,23 +103,17 @@ namespace ChillWithYou.EnvSync.UI
                 return false;
             }
         }
-        /// <summary>
-        /// Trigger F7-like force refresh (reload config and force weather sync)
-        /// </summary>
+
         static void TriggerForceRefresh()
         {
             try
             {
-                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Force refresh triggered by temperature unit change");
-
-                // Reload config
+                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Force refresh triggered");
                 ChillEnvPlugin.Instance.Config.Reload();
 
-                // Find AutoEnvRunner and trigger force sync
                 var runner = Object.FindObjectOfType<Core.AutoEnvRunner>();
                 if (runner != null)
                 {
-                    // Use reflection to call ForceRefreshWeather method
                     var method = runner.GetType().GetMethod("ForceRefreshWeather",
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                     if (method != null)
@@ -144,10 +128,11 @@ namespace ChillWithYou.EnvSync.UI
                 ChillEnvPlugin.Log?.LogError($"[Weather MOD] Force refresh failed: {ex.Message}");
             }
         }
+
         static void RetryIntegration()
         {
             if (_integratedWithIGPU)
-                return; // Already integrated
+                return;
 
             if (TryIntegrateWithIGPU())
             {
@@ -156,7 +141,6 @@ namespace ChillWithYou.EnvSync.UI
             }
             else
             {
-                // Final fallback - create standalone UI
                 ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Integration failed after retries, creating standalone tab");
                 CreateModSettingsTab(cachedSettingUI);
                 HookIntoTabButtons(cachedSettingUI);
@@ -164,14 +148,10 @@ namespace ChillWithYou.EnvSync.UI
             }
         }
 
-        /// <summary>
-        /// Register weather mod settings with iGPU Savior's ModSettingsManager
-        /// </summary>
         static void RegisterWithIGPU(object managerInstance, System.Type managerType)
         {
             try
             {
-                // Check if UI is currently being built
                 var isBuildingField = managerType.GetField("_isBuildingUI",
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
@@ -186,19 +166,17 @@ namespace ChillWithYou.EnvSync.UI
                     }
                 }
 
-                // Register the mod with Chill Env Sync as primary name
                 var registerMethod = managerType.GetMethod("RegisterMod");
                 if (registerMethod != null)
                 {
-                    // Register with the combined name
                     registerMethod.Invoke(managerInstance, new object[] { "Chill Env Sync", "5.3.0" });
                     ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Registered with ModSettingsManager");
                 }
 
-                // Add dropdown for temperature unit
                 var addDropdownMethod = managerType.GetMethod("AddDropdown");
                 if (addDropdownMethod != null)
                 {
+                    // Temperature Unit
                     var tempOptions = new List<string> { "Celsius (°C)", "Fahrenheit (°F)", "Kelvin (K)" };
                     int currentIndex = 0;
                     string currentUnit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
@@ -216,17 +194,31 @@ namespace ChillWithYou.EnvSync.UI
                             ChillEnvPlugin.Cfg_TemperatureUnit.Value = units[index];
                             ChillEnvPlugin.Instance.Config.Save();
                             ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Temperature unit changed to: {units[index]}");
+                            TriggerForceRefresh();
+                        })
+                    });
 
+                    // Weather Provider
+                    var providerOptions = new List<string> { "Seniverse", "OpenWeather" };
+                    int providerIndex = ChillEnvPlugin.Cfg_WeatherProvider.Value.Equals("OpenWeather", System.StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+
+                    addDropdownMethod.Invoke(managerInstance, new object[] {
+                        "Weather Provider",
+                        providerOptions,
+                        providerIndex,
+                        (System.Action<int>)((index) => {
+                            string[] providers = { "Seniverse", "OpenWeather" };
+                            ChillEnvPlugin.Cfg_WeatherProvider.Value = providers[index];
+                            ChillEnvPlugin.Instance.Config.Save();
+                            ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providers[index]}");
                             TriggerForceRefresh();
                         })
                     });
                 }
 
-                // Add toggles
                 var addToggleMethod = managerType.GetMethod("AddToggle");
                 if (addToggleMethod != null)
                 {
-                    // Weather Settings Section
                     addToggleMethod.Invoke(managerInstance, new object[] {
                         "Enable Weather API Sync",
                         ChillEnvPlugin.Cfg_EnableWeatherSync.Value,
@@ -254,7 +246,6 @@ namespace ChillWithYou.EnvSync.UI
                         })
                     });
 
-                    // Features Section (must restart game)
                     addToggleMethod.Invoke(managerInstance, new object[] {
                         "Enable Seasonal Easter Eggs",
                         ChillEnvPlugin.Cfg_EnableEasterEggs.Value,
@@ -285,23 +276,19 @@ namespace ChillWithYou.EnvSync.UI
                     });
                 }
 
-                // Trigger UI rebuild and FORCE TITLE UPDATE
                 WeatherModUIRunner.Instance.RunDelayed(0.2f, () =>
                 {
                     var rebuildMethod = managerType.GetMethod("RebuildUI");
                     if (rebuildMethod != null && cachedSettingUI != null)
                     {
-                        // Find the MOD content parent (should be created by iGPU Savior)
                         var modContent = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
                         if (modContent != null)
                         {
                             rebuildMethod.Invoke(managerInstance, new object[] { modContent, cachedSettingUI.transform });
                             ChillEnvPlugin.Log?.LogInfo("[Weather MOD] UI rebuilt successfully");
 
-                            // === FORCE TITLE UPDATE + CENTER CONTENT ===
                             try
                             {
-                                // Update title
                                 var modSettingsRoot = cachedSettingUI.transform.Find("ModSettingsContent");
                                 if (modSettingsRoot != null)
                                 {
@@ -311,16 +298,13 @@ namespace ChillWithYou.EnvSync.UI
                                         var tmp = titleTrans.GetComponent<TextMeshProUGUI>();
                                         if (tmp != null)
                                         {
-                                            // Center the text
                                             tmp.alignment = TextAlignmentOptions.Center;
-                                            // Set the combined title with version on same line
                                             tmp.text = "<size=20><b>Chill Env Sync (iGPU Savior Active) <color=#888888>v5.3.0 + 1.6.0</color></b></size>";
                                             ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Title forcibly updated and centered");
                                         }
                                     }
                                 }
 
-                                // *** NEW: CENTER ALL CONTENT ***
                                 if (modContent != null)
                                 {
                                     var vGroup = modContent.GetComponent<VerticalLayoutGroup>();
@@ -330,7 +314,6 @@ namespace ChillWithYou.EnvSync.UI
                                         ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Content centered");
                                     }
 
-                                    // Force rebuild layout
                                     LayoutRebuilder.ForceRebuildLayoutImmediate(modContent as RectTransform);
                                 }
                             }
@@ -338,7 +321,6 @@ namespace ChillWithYou.EnvSync.UI
                             {
                                 ChillEnvPlugin.Log?.LogError($"[Weather MOD] Failed to update title/center: {ex.Message}");
                             }
-                            // === END UPDATE ===
                         }
                     }
                 });
@@ -351,7 +333,7 @@ namespace ChillWithYou.EnvSync.UI
             }
         }
 
-        // === STANDALONE MODE METHODS (used when iGPU Savior is not present) ===
+        // === STANDALONE MODE METHODS ===
 
         static void CreateModSettingsTab(SettingUI settingUI)
         {
@@ -414,7 +396,7 @@ namespace ChillWithYou.EnvSync.UI
             var vGroup = content.GetComponent<VerticalLayoutGroup>() ?? content.AddComponent<VerticalLayoutGroup>();
             vGroup.spacing = 16f;
             vGroup.padding = new RectOffset(40, 40, 20, 20);
-            vGroup.childAlignment = TextAnchor.UpperCenter; // CENTER ALIGNMENT
+            vGroup.childAlignment = TextAnchor.UpperCenter;
             vGroup.childControlHeight = false;
             vGroup.childControlWidth = true;
             vGroup.childForceExpandHeight = false;
@@ -431,7 +413,6 @@ namespace ChillWithYou.EnvSync.UI
             {
                 if (content == null || settingUI == null) return;
 
-                // Version on same line as title
                 CreateSectionHeader(content.transform, "Chill Env Sync", "5.3.0");
 
                 Transform audioTabContent = settingUI.transform.Find("MusicAudio/ScrollView/Viewport/Content");
@@ -449,10 +430,39 @@ namespace ChillWithYou.EnvSync.UI
 
                 if (originalRow == null) return;
 
-                CreateSubHeader(content.transform, "Weather & Time");
+                // === API CONFIGURATION SECTION ===
+                CreateSubHeader(content.transform, "API Configuration");
+
+                // Input field for Location
+                CreateInputField(content.transform, settingUI, "Location", 
+                    ChillEnvPlugin.Cfg_Location.Value,
+                    (newValue) => {
+                        ChillEnvPlugin.Cfg_Location.Value = newValue;
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Location changed to: {newValue}");
+                        TriggerForceRefresh();
+                    });
+
+                // Input field for API Key
+                CreateInputField(content.transform, settingUI, "API Key", 
+                    ChillEnvPlugin.Cfg_GeneralAPI.Value,
+                    (newValue) => {
+                        ChillEnvPlugin.Cfg_GeneralAPI.Value = newValue;
+                        ChillEnvPlugin.Cfg_ApiKey.Value = newValue; // Keep both in sync
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] API Key updated");
+                        TriggerForceRefresh();
+                    },
+                    true); // Password mode
+
+                // Weather Provider Dropdown
+                CreateWeatherProviderDropdown(content.transform, settingUI);
 
                 // Temperature Unit Dropdown
                 CreateTemperatureDropdown(content.transform, settingUI);
+
+                // === WEATHER & TIME SECTION ===
+                CreateSubHeader(content.transform, "Weather & Time");
 
                 CreateToggle(content.transform, originalRow, "Enable Weather API Sync",
                     ChillEnvPlugin.Cfg_EnableWeatherSync.Value,
@@ -475,6 +485,7 @@ namespace ChillWithYou.EnvSync.UI
                         ChillEnvPlugin.Instance.Config.Save();
                     });
 
+                // === FEATURES SECTION ===
                 CreateSubHeader(content.transform, "Features (Must restart game)");
 
                 CreateToggle(content.transform, originalRow, "Enable Seasonal Easter Eggs",
@@ -504,24 +515,259 @@ namespace ChillWithYou.EnvSync.UI
             });
         }
 
-        static void CreateTemperatureDropdown(Transform parent, SettingUI settingUI)
+        /// <summary>
+        /// Creates an input field similar to the FPS input fields shown in the screenshot
+        /// </summary>
+        static void CreateInputField(Transform parent, SettingUI settingUI, string label, string initialValue, 
+            System.Action<string> onValueChanged, bool isPassword = false)
+        {
+            // Create container
+            GameObject container = new GameObject($"InputField_{label}");
+            container.transform.SetParent(parent, false);
+
+            var rect = container.AddComponent<RectTransform>();
+            rect.sizeDelta = new Vector2(0, 60);
+
+            var layout = container.AddComponent<LayoutElement>();
+            layout.preferredHeight = 60f;
+            layout.minHeight = 60f;
+            layout.flexibleWidth = 1f;
+
+            var hGroup = container.AddComponent<HorizontalLayoutGroup>();
+            hGroup.spacing = 20f;
+            hGroup.childAlignment = TextAnchor.MiddleLeft;
+            hGroup.childControlWidth = false;
+            hGroup.childControlHeight = true;
+            hGroup.childForceExpandWidth = false;
+            hGroup.childForceExpandHeight = false;
+
+            // Create label
+            GameObject labelObj = new GameObject("Label");
+            labelObj.transform.SetParent(container.transform, false);
+
+            var labelRect = labelObj.AddComponent<RectTransform>();
+            labelRect.sizeDelta = new Vector2(400, 60);
+
+            var labelLayout = labelObj.AddComponent<LayoutElement>();
+            labelLayout.minWidth = 400f;
+            labelLayout.preferredWidth = 400f;
+
+            var labelText = labelObj.AddComponent<TextMeshProUGUI>();
+            labelText.text = label;
+            labelText.fontSize = 18;
+            labelText.alignment = TextAlignmentOptions.MidlineLeft;
+            labelText.color = Color.white;
+
+            // Create input field
+            GameObject inputObj = new GameObject("InputField");
+            inputObj.transform.SetParent(container.transform, false);
+
+            var inputRect = inputObj.AddComponent<RectTransform>();
+            inputRect.sizeDelta = new Vector2(350, 45);
+
+            var inputLayout = inputObj.AddComponent<LayoutElement>();
+            inputLayout.minWidth = 350f;
+            inputLayout.preferredWidth = 350f;
+            inputLayout.minHeight = 45f;
+            inputLayout.preferredHeight = 45f;
+
+            // Add background image
+            var inputBg = inputObj.AddComponent<Image>();
+            inputBg.color = new Color(0.15f, 0.15f, 0.15f, 1f);
+
+            // Add input field component
+            var inputField = inputObj.AddComponent<TMP_InputField>();
+            inputField.textViewport = inputRect;
+
+            // Create text component
+            GameObject textObj = new GameObject("Text");
+            textObj.transform.SetParent(inputObj.transform, false);
+
+            var textRect = textObj.AddComponent<RectTransform>();
+            textRect.anchorMin = Vector2.zero;
+            textRect.anchorMax = Vector2.one;
+            textRect.offsetMin = new Vector2(10, 5);
+            textRect.offsetMax = new Vector2(-10, -5);
+
+            var textComp = textObj.AddComponent<TextMeshProUGUI>();
+            textComp.fontSize = 16;
+            textComp.color = Color.white;
+            textComp.alignment = TextAlignmentOptions.MidlineLeft;
+
+            // Create placeholder
+            GameObject placeholderObj = new GameObject("Placeholder");
+            placeholderObj.transform.SetParent(inputObj.transform, false);
+
+            var placeholderRect = placeholderObj.AddComponent<RectTransform>();
+            placeholderRect.anchorMin = Vector2.zero;
+            placeholderRect.anchorMax = Vector2.one;
+            placeholderRect.offsetMin = new Vector2(10, 5);
+            placeholderRect.offsetMax = new Vector2(-10, -5);
+
+            var placeholderText = placeholderObj.AddComponent<TextMeshProUGUI>();
+            placeholderText.text = $"Enter {label}...";
+            placeholderText.fontSize = 16;
+            placeholderText.color = new Color(0.5f, 0.5f, 0.5f, 1f);
+            placeholderText.alignment = TextAlignmentOptions.MidlineLeft;
+            placeholderText.fontStyle = FontStyles.Italic;
+
+            // Configure input field
+            inputField.textComponent = textComp;
+            inputField.placeholder = placeholderText;
+            inputField.text = initialValue;
+            
+            if (isPassword)
+            {
+                inputField.contentType = TMP_InputField.ContentType.Password;
+                inputField.inputType = TMP_InputField.InputType.Password;
+            }
+            else
+            {
+                inputField.contentType = TMP_InputField.ContentType.Standard;
+            }
+
+            inputField.onEndEdit.AddListener((value) => {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    onValueChanged?.Invoke(value.Trim());
+                    PlayClickSound();
+                }
+            });
+
+            // Set colors
+            var colors = inputField.colors;
+            colors.normalColor = new Color(0.15f, 0.15f, 0.15f, 1f);
+            colors.highlightedColor = new Color(0.2f, 0.2f, 0.2f, 1f);
+            colors.selectedColor = new Color(0.25f, 0.25f, 0.25f, 1f);
+            inputField.colors = colors;
+        }
+
+        /// <summary>
+        /// Creates a dropdown for Weather Provider selection
+        /// </summary>
+        static void CreateWeatherProviderDropdown(Transform parent, SettingUI settingUI)
         {
             try
             {
-                // Clone the graphics quality dropdown as template
                 Transform graphicsContent = settingUI.transform.Find("Graphics/ScrollView/Viewport/Content");
                 if (graphicsContent == null) return;
 
                 Transform originalDropdown = graphicsContent.Find("GraphicQualityPulldownList");
                 if (originalDropdown == null) return;
 
-                // Clone the dropdown
+                GameObject dropdown = Object.Instantiate(originalDropdown.gameObject);
+                dropdown.name = "WeatherProviderDropdown";
+                dropdown.transform.SetParent(parent, false);
+                dropdown.SetActive(false);
+
+                var titlePaths = new[] { "TitleText", "Title/Text", "Text" };
+                foreach (var path in titlePaths)
+                {
+                    var titleTransform = dropdown.transform.Find(path);
+                    if (titleTransform != null)
+                    {
+                        var tmp = titleTransform.GetComponent<TMP_Text>();
+                        if (tmp != null)
+                        {
+                            tmp.text = "Weather Provider";
+                            break;
+                        }
+                    }
+                }
+
+                Transform content = dropdown.transform.Find("PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
+                if (content == null) return;
+
+                int childCount = content.childCount;
+                for (int i = childCount - 1; i >= 0; i--)
+                {
+                    Object.Destroy(content.GetChild(i).gameObject);
+                }
+
+                content.gameObject.SetActive(true);
+
+                Transform firstButton = graphicsContent.Find("GraphicQualityPulldownList/PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
+                if (firstButton != null && firstButton.childCount > 0)
+                {
+                    GameObject buttonTemplate = Object.Instantiate(firstButton.GetChild(0).gameObject);
+                    buttonTemplate.name = "SelectButtonTemplate";
+                    buttonTemplate.SetActive(false);
+
+                    string[] providerOptions = { "Seniverse", "OpenWeather" };
+                    int currentIndex = ChillEnvPlugin.Cfg_WeatherProvider.Value.Equals("OpenWeather", System.StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+
+                    for (int i = 0; i < providerOptions.Length; i++)
+                    {
+                        GameObject newButton = Object.Instantiate(buttonTemplate, content);
+                        newButton.name = $"SelectButton_{providerOptions[i]}";
+                        newButton.SetActive(true);
+
+                        TMP_Text buttonText = newButton.GetComponentInChildren<TMP_Text>();
+                        if (buttonText != null)
+                        {
+                            buttonText.text = providerOptions[i];
+                        }
+
+                        var images = newButton.GetComponentsInChildren<Image>(true);
+                        foreach (var img in images)
+                        {
+                            img.raycastTarget = true;
+                        }
+
+                        Button button = newButton.GetComponent<Button>();
+                        if (button != null)
+                        {
+                            int index = i;
+                            button.onClick.RemoveAllListeners();
+                            button.onClick.AddListener(() =>
+                            {
+                                ChillEnvPlugin.Cfg_WeatherProvider.Value = providerOptions[index];
+                                ChillEnvPlugin.Instance.Config.Save();
+                                ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providerOptions[index]}");
+
+                                UpdateDropdownSelectedText(dropdown, providerOptions[index]);
+                                CloseDropdown(dropdown);
+                                PlayClickSound();
+                                TriggerForceRefresh();
+                            });
+
+                            if (!button.interactable) button.interactable = true;
+                            if (button.targetGraphic == null)
+                            {
+                                var graphic = newButton.GetComponent<Image>();
+                                if (graphic != null) button.targetGraphic = graphic;
+                            }
+                        }
+                    }
+
+                    Object.Destroy(buttonTemplate);
+                    UpdateDropdownSelectedText(dropdown, providerOptions[currentIndex]);
+                    ConfigureDropdownUI(dropdown, originalDropdown, content);
+                }
+
+                dropdown.SetActive(true);
+            }
+            catch (System.Exception e)
+            {
+                ChillEnvPlugin.Log?.LogError($"CreateWeatherProviderDropdown failed: {e.Message}");
+            }
+        }
+
+        static void CreateTemperatureDropdown(Transform parent, SettingUI settingUI)
+        {
+            try
+            {
+                Transform graphicsContent = settingUI.transform.Find("Graphics/ScrollView/Viewport/Content");
+                if (graphicsContent == null) return;
+
+                Transform originalDropdown = graphicsContent.Find("GraphicQualityPulldownList");
+                if (originalDropdown == null) return;
+
                 GameObject dropdown = Object.Instantiate(originalDropdown.gameObject);
                 dropdown.name = "TemperatureUnitDropdown";
                 dropdown.transform.SetParent(parent, false);
-                dropdown.SetActive(false); // Hide while configuring
+                dropdown.SetActive(false);
 
-                // Update title
                 var titlePaths = new[] { "TitleText", "Title/Text", "Text" };
                 foreach (var path in titlePaths)
                 {
@@ -537,21 +783,17 @@ namespace ChillWithYou.EnvSync.UI
                     }
                 }
 
-                // Find the Content container
                 Transform content = dropdown.transform.Find("PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
                 if (content == null) return;
 
-                // Clear existing options
                 int childCount = content.childCount;
                 for (int i = childCount - 1; i >= 0; i--)
                 {
                     Object.Destroy(content.GetChild(i).gameObject);
                 }
 
-                // Keep Content always active
                 content.gameObject.SetActive(true);
 
-                // Get button template
                 Transform firstButton = graphicsContent.Find("GraphicQualityPulldownList/PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
                 if (firstButton != null && firstButton.childCount > 0)
                 {
@@ -559,11 +801,9 @@ namespace ChillWithYou.EnvSync.UI
                     buttonTemplate.name = "SelectButtonTemplate";
                     buttonTemplate.SetActive(false);
 
-                    // Temperature options
                     string[] tempOptions = { "Celsius (°C)", "Fahrenheit (°F)", "Kelvin (K)" };
                     string[] tempUnits = { "Celsius", "Fahrenheit", "Kelvin" };
 
-                    // Determine current selection
                     string currentUnit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
                     int currentIndex = 0;
                     if (currentUnit.Equals("Fahrenheit", System.StringComparison.OrdinalIgnoreCase))
@@ -571,32 +811,28 @@ namespace ChillWithYou.EnvSync.UI
                     else if (currentUnit.Equals("Kelvin", System.StringComparison.OrdinalIgnoreCase))
                         currentIndex = 2;
 
-                    // Add options
                     for (int i = 0; i < tempOptions.Length; i++)
                     {
                         GameObject newButton = Object.Instantiate(buttonTemplate, content);
                         newButton.name = $"SelectButton_{tempOptions[i]}";
                         newButton.SetActive(true);
 
-                        // Set button text
                         TMP_Text buttonText = newButton.GetComponentInChildren<TMP_Text>();
                         if (buttonText != null)
                         {
                             buttonText.text = tempOptions[i];
                         }
 
-                        // Ensure raycast enabled
                         var images = newButton.GetComponentsInChildren<Image>(true);
                         foreach (var img in images)
                         {
                             img.raycastTarget = true;
                         }
 
-                        // Setup button click
                         Button button = newButton.GetComponent<Button>();
                         if (button != null)
                         {
-                            int index = i; // Capture for closure
+                            int index = i;
                             button.onClick.RemoveAllListeners();
                             button.onClick.AddListener(() =>
                             {
@@ -604,7 +840,6 @@ namespace ChillWithYou.EnvSync.UI
                                 ChillEnvPlugin.Instance.Config.Save();
                                 ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Temperature unit changed to: {tempUnits[index]}");
 
-                                // Update selected text and close dropdown
                                 UpdateDropdownSelectedText(dropdown, tempOptions[index]);
                                 CloseDropdown(dropdown);
                                 PlayClickSound();
@@ -621,11 +856,7 @@ namespace ChillWithYou.EnvSync.UI
                     }
 
                     Object.Destroy(buttonTemplate);
-
-                    // Set initial selected text
                     UpdateDropdownSelectedText(dropdown, tempOptions[currentIndex]);
-
-                    // Configure dropdown UI component WITH HIGHER Z-ORDER
                     ConfigureDropdownUI(dropdown, originalDropdown, content);
                 }
 
@@ -683,7 +914,6 @@ namespace ChillWithYou.EnvSync.UI
         {
             try
             {
-                // Get PulldownListUI type
                 var pulldownUIType = System.AppDomain.CurrentDomain.GetAssemblies()
                     .SelectMany(a => {
                         try { return a.GetTypes(); }
@@ -693,7 +923,6 @@ namespace ChillWithYou.EnvSync.UI
 
                 if (pulldownUIType == null) return;
 
-                // Find nodes
                 Transform pulldownList = dropdown.transform.Find("PulldownList");
                 Transform pulldown = dropdown.transform.Find("PulldownList/Pulldown");
                 Transform pulldownButton = dropdown.transform.Find("PulldownList/PulldownButton");
@@ -717,7 +946,6 @@ namespace ChillWithYou.EnvSync.UI
                     pulldownUIType.GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(pulldownUI, value);
                 }
 
-                // Calculate heights
                 int childCount = content.childCount;
                 float itemHeight = 40f;
                 if (childCount > 0)
@@ -727,13 +955,10 @@ namespace ChillWithYou.EnvSync.UI
                 }
 
                 float realContentHeight = childCount * itemHeight;
-                float maxVisibleItems = 6f;
-                float maxViewHeight = maxVisibleItems * itemHeight;
                 float finalViewHeight = realContentHeight;
                 float headerHeight = pulldownParentRect.rect.height;
                 float openSize = headerHeight + finalViewHeight + 10f;
 
-                // Set content size
                 if (contentRect != null)
                 {
                     contentRect.anchorMin = Vector2.zero;
@@ -743,13 +968,12 @@ namespace ChillWithYou.EnvSync.UI
                     contentRect.anchoredPosition = Vector2.zero;
                 }
 
-                // *** FIX: Add Canvas with HIGH sorting order to dropdown root ***
                 Canvas rootCanvas = dropdown.GetComponent<Canvas>();
                 if (rootCanvas == null)
                 {
                     rootCanvas = dropdown.AddComponent<Canvas>();
                     rootCanvas.overrideSorting = true;
-                    rootCanvas.sortingOrder = 40000; // Higher than toggles below
+                    rootCanvas.sortingOrder = 40000;
 
                     if (dropdown.GetComponent<GraphicRaycaster>() == null)
                         dropdown.AddComponent<GraphicRaycaster>();
@@ -757,10 +981,9 @@ namespace ChillWithYou.EnvSync.UI
                 else
                 {
                     rootCanvas.overrideSorting = true;
-                    rootCanvas.sortingOrder = 40000; // Ensure high order
+                    rootCanvas.sortingOrder = 40000;
                 }
 
-                // Set fields
                 SetField("_currentSelectContentText", currentSelectTextComp);
                 SetField("_pullDownParentRect", pulldownParentRect);
                 SetField("_openPullDownSizeDeltaY", openSize);
@@ -769,7 +992,6 @@ namespace ChillWithYou.EnvSync.UI
                 SetField("_pullDownButtonRect", pulldownButtonRect);
                 SetField("_isOpen", false);
 
-                // Call Setup
                 pulldownUIType.GetMethod("Setup")?.Invoke(pulldownUI, null);
             }
             catch (System.Exception e)
@@ -793,7 +1015,7 @@ namespace ChillWithYou.EnvSync.UI
 
             var tmp = obj.AddComponent<TextMeshProUGUI>();
             tmp.text = $"<size=16><color=#AAAAAA>{text}</color></size>";
-            tmp.alignment = TextAlignmentOptions.Center; // CENTERED
+            tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = new Color(0.67f, 0.67f, 0.67f, 1f);
         }
 
@@ -811,7 +1033,6 @@ namespace ChillWithYou.EnvSync.UI
             le.flexibleWidth = 1f;
 
             var tmp = obj.AddComponent<TextMeshProUGUI>();
-            // VERSION ON SAME LINE
             string verStr = string.IsNullOrEmpty(version) ? "" : $" <size=16><color=#888888>v{version}</color></size>";
             tmp.text = $"<size=20><b>{name}</b></size>{verStr}";
             tmp.alignment = TextAlignmentOptions.Center;
@@ -837,7 +1058,7 @@ namespace ChillWithYou.EnvSync.UI
             {
                 var sortedTexts = titleTexts.OrderBy(t => t.transform.position.x).ToArray();
                 sortedTexts[0].text = label;
-                sortedTexts[0].alignment = TextAlignmentOptions.MidlineLeft; // Keep left-aligned for toggles
+                sortedTexts[0].alignment = TextAlignmentOptions.MidlineLeft;
             }
 
             Button[] buttons = toggleRow.GetComponentsInChildren<Button>(true);
