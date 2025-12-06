@@ -78,6 +78,8 @@ Also auto-triggered when conditions are met (e.g., cooking sounds, AC noise, cic
 ### TO-DO
 > 🗒️ Improve and stabilize the mod for OpenWeather API usage.
 > 
+> 🌧️ Optimise the code
+> 
 > ⚠️ Fix critical crashing bug
 
 ## 📦 Installation
@@ -101,11 +103,11 @@ After the first run, a configuration file is generated here: `BepInEx/config/chi
 some settings will also appear in the in-game MOD Settings tab for convenience.
 
 ### Weather API Providers
-This fork supports both Seniverse and OpenWeather. Select one using the `WeatherProvider` field.
+This fork supports both Seniverse and OpenWeather, but mainly made for OpenWeather. Select one using the `WeatherProvider` field.
 
 | Provider | Location Format | Notes |
 | :--- | :--- | :--- |
-| **Seniverse** | City name (e.g., `beijing`, `上海`, `new york`) | Good for Chinese users; lower free tier quota. |
+| **Seniverse** | City name (e.g., `beijing`, `上海`) | Made for Chinese users, lower free tier quota. |
 | **OpenWeather** | City name **or** `latitude,longitude` (e.g., `40.7128,-74.0060`) | Global; 60 calls per minute free tier. |
 
 **Example Config Snippets**
@@ -116,6 +118,7 @@ This fork supports both Seniverse and OpenWeather. Select one using the `Weather
 EnableWeatherSync = true
 WeatherProvider = Seniverse
 ApiKey = YOUR_SENIVERSE_KEY_HERE
+# (There's a default Seniverse key already so don't worry.)
 Location = beijing
 ```
 
@@ -168,6 +171,7 @@ SimulatedText = DebugWeather
   5. Set `WeatherProvider = Seniverse`.
 
 > 💡 The newer version has a built-in key. You can leave the `ApiKey` field empty to use the default service, or use your own.
+> 💡 The default key is only for Seniverse, if you require a global (OpenWeather) key, you'll have to get it yourself, but no worries, it's totally free.
 
 - **OpenWeather:**
   1. Visit [OpenWeather](https://openweathermap.org/) and sign up for a free account.
@@ -240,8 +244,8 @@ The plugin automatically switches base environments based on your configured (or
 ## 📝 Version History
 
 ### v5.3.0
-- Staying up to date with original repository
-- Added support to iGPUSavior
+- Staying up to date with the original repository
+- Added support for iGPUSavior
 - Minor changes
 
 ### v5.2.1
