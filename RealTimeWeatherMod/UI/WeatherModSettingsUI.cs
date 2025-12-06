@@ -111,16 +111,33 @@ namespace ChillWithYou.EnvSync.UI
                 ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Force refresh triggered");
                 ChillEnvPlugin.Instance.Config.Reload();
 
-                var runner = Object.FindObjectOfType<Core.AutoEnvRunner>();
+                // Find the runner in the Chill Env Sync's GameObject
+                var runnerObject = GameObject.Find("ChillEnvSyncRunner");
+                if (runnerObject == null)
+                {
+                    ChillEnvPlugin.Log?.LogError("[Weather MOD] ChillEnvSyncRunner GameObject not found");
+                    return;
+                }
+
+                var runner = runnerObject.GetComponent<Core.AutoEnvRunner>();
                 if (runner != null)
                 {
-                    var method = runner.GetType().GetMethod("ForceRefreshWeather",
+                    // Use reflection to call the private ForceRefreshWeather method
+                    var refreshMethod = runner.GetType().GetMethod("ForceRefreshWeather",
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (method != null)
+                    if (refreshMethod != null)
                     {
-                        method.Invoke(runner, null);
-                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Weather data force refreshed");
+                        refreshMethod.Invoke(runner, null);
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Weather data force refreshed (API call initiated)");
                     }
+                    else
+                    {
+                        ChillEnvPlugin.Log?.LogError("[Weather MOD] ForceRefreshWeather method not found");
+                    }
+                }
+                else
+                {
+                    ChillEnvPlugin.Log?.LogError("[Weather MOD] AutoEnvRunner component not found on GameObject");
                 }
             }
             catch (System.Exception ex)
@@ -166,11 +183,42 @@ namespace ChillWithYou.EnvSync.UI
                     }
                 }
 
-                var registerMethod = managerType.GetMethod("RegisterMod");
-                if (registerMethod != null)
+
+                Transform modContent = null;
+                if (cachedSettingUI != null)
                 {
-                    registerMethod.Invoke(managerInstance, new object[] { "Chill Env Sync", "5.3.0" });
-                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Registered with ModSettingsManager");
+                    modContent = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
+                }
+
+                // === Add custom input fields MANUALLY (bypassing ModSettingsManager) ===
+                if (modContent != null)
+                {
+                    WeatherModUIRunner.Instance.RunDelayed(0.65f, () =>
+                    {
+                        CreateSubHeader(modContent, "API Configuration");
+
+                        CreateInputField(modContent, cachedSettingUI, "Location",
+                            ChillEnvPlugin.Cfg_Location.Value,
+                            (newValue) => {
+                                ChillEnvPlugin.Cfg_Location.Value = newValue;
+                                ChillEnvPlugin.Instance.Config.Save();
+                                ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Location changed to: {newValue}");
+                                TriggerForceRefresh();
+                            });
+
+                        CreateInputField(modContent, cachedSettingUI, "API Key",
+                            ChillEnvPlugin.Cfg_GeneralAPI.Value,
+                            (newValue) => {
+                                ChillEnvPlugin.Cfg_GeneralAPI.Value = newValue;
+                                ChillEnvPlugin.Cfg_ApiKey.Value = newValue;
+                                ChillEnvPlugin.Instance.Config.Save();
+                                ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] API Key updated");
+                                TriggerForceRefresh();
+                            },
+                            true); // Password mode
+
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Custom input fields added");
+                    });
                 }
 
                 var addDropdownMethod = managerType.GetMethod("AddDropdown");
@@ -281,10 +329,11 @@ namespace ChillWithYou.EnvSync.UI
                     var rebuildMethod = managerType.GetMethod("RebuildUI");
                     if (rebuildMethod != null && cachedSettingUI != null)
                     {
-                        var modContent = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
-                        if (modContent != null)
+                        // Remove 'var' here - just use the existing modContent variable
+                        var contentTransform = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
+                        if (contentTransform != null)
                         {
-                            rebuildMethod.Invoke(managerInstance, new object[] { modContent, cachedSettingUI.transform });
+                            rebuildMethod.Invoke(managerInstance, new object[] { contentTransform, cachedSettingUI.transform });
                             ChillEnvPlugin.Log?.LogInfo("[Weather MOD] UI rebuilt successfully");
 
                             try
@@ -305,16 +354,16 @@ namespace ChillWithYou.EnvSync.UI
                                     }
                                 }
 
-                                if (modContent != null)
+                                if (contentTransform != null)
                                 {
-                                    var vGroup = modContent.GetComponent<VerticalLayoutGroup>();
+                                    var vGroup = contentTransform.GetComponent<VerticalLayoutGroup>();
                                     if (vGroup != null)
                                     {
                                         vGroup.childAlignment = TextAnchor.UpperCenter;
                                         ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Content centered");
                                     }
 
-                                    LayoutRebuilder.ForceRebuildLayoutImmediate(modContent as RectTransform);
+                                    LayoutRebuilder.ForceRebuildLayoutImmediate(contentTransform as RectTransform);
                                 }
                             }
                             catch (System.Exception ex)
@@ -332,7 +381,6 @@ namespace ChillWithYou.EnvSync.UI
                 ChillEnvPlugin.Log?.LogError($"[Weather MOD] Registration failed: {ex.Message}\n{ex.StackTrace}");
             }
         }
-
         // === STANDALONE MODE METHODS ===
 
         static void CreateModSettingsTab(SettingUI settingUI)
@@ -434,7 +482,7 @@ namespace ChillWithYou.EnvSync.UI
                 CreateSubHeader(content.transform, "API Configuration");
 
                 // Input field for Location
-                CreateInputField(content.transform, settingUI, "Location", 
+                CreateInputField(content.transform, settingUI, "Location",
                     ChillEnvPlugin.Cfg_Location.Value,
                     (newValue) => {
                         ChillEnvPlugin.Cfg_Location.Value = newValue;
@@ -444,7 +492,7 @@ namespace ChillWithYou.EnvSync.UI
                     });
 
                 // Input field for API Key
-                CreateInputField(content.transform, settingUI, "API Key", 
+                CreateInputField(content.transform, settingUI, "API Key",
                     ChillEnvPlugin.Cfg_GeneralAPI.Value,
                     (newValue) => {
                         ChillEnvPlugin.Cfg_GeneralAPI.Value = newValue;
@@ -518,7 +566,7 @@ namespace ChillWithYou.EnvSync.UI
         /// <summary>
         /// Creates an input field similar to the FPS input fields shown in the screenshot
         /// </summary>
-        static void CreateInputField(Transform parent, SettingUI settingUI, string label, string initialValue, 
+        static void CreateInputField(Transform parent, SettingUI settingUI, string label, string initialValue,
             System.Action<string> onValueChanged, bool isPassword = false)
         {
             // Create container
@@ -615,7 +663,7 @@ namespace ChillWithYou.EnvSync.UI
             inputField.textComponent = textComp;
             inputField.placeholder = placeholderText;
             inputField.text = initialValue;
-            
+
             if (isPassword)
             {
                 inputField.contentType = TMP_InputField.ContentType.Password;
