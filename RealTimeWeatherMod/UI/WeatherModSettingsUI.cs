@@ -385,7 +385,6 @@ namespace ChillWithYou.EnvSync.UI
                     var rebuildMethod = managerType.GetMethod("RebuildUI");
                     if (rebuildMethod != null && cachedSettingUI != null)
                     {
-                        // Remove 'var' here - just use the existing modContent variable
                         var contentTransform = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
                         if (contentTransform != null)
                         {
@@ -399,12 +398,17 @@ namespace ChillWithYou.EnvSync.UI
                                 {
                                     var titleTrans = modSettingsRoot.Find("Title");
                                     if (titleTrans != null)
-                                    {
+{
                                         var tmp = titleTrans.GetComponent<TextMeshProUGUI>();
                                         if (tmp != null)
-                                        {
+    {
                                             tmp.alignment = TextAlignmentOptions.Center;
-                                            tmp.text = "<size=20><b>Chill Env Sync (iGPU Savior Active) <color=#888888>v5.3.0 + 1.6.0</color></b></size>";
+
+                                            // Dynamically get iGPU Savior version
+                                            string igpuVersion = GetIGPUSaviorVersion();
+                                            string weatherVersion = $"v{ChillEnvPlugin.PluginVersion}";
+
+                                            tmp.text = $"<size=20><b>Chill Env Sync (iGPU Savior Active) <color=#888888>{weatherVersion} + {igpuVersion}</color></b></size>";
                                             ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Title forcibly updated and centered");
                                         }
                                     }
@@ -1473,7 +1477,65 @@ namespace ChillWithYou.EnvSync.UI
             }
             return false;
         }
+        /// <summary>
+        /// Dynamically retrieves iGPU Savior's version using reflection
+        /// </summary>
+        static string GetIGPUSaviorVersion()
+        {
+            try
+            {
+                // Try to find the PotatoPlugin type
+                var allTypes = System.AppDomain.CurrentDomain.GetAssemblies()
+                    .SelectMany(a => {
+                        try { return a.GetTypes(); }
+                        catch { return new System.Type[0]; }
+                    });
 
+                var potatoPluginType = allTypes.FirstOrDefault(t =>
+                    t.Name == "PotatoPlugin" && t.Namespace == "PotatoOptimization.Core");
+
+                if (potatoPluginType == null)
+                {
+                    ChillEnvPlugin.Log?.LogWarning("[Weather MOD] PotatoPlugin type not found, using fallback version");
+                    return "v?.?.?";
+                }
+
+                // Get the PluginVersion constant
+                var versionField = potatoPluginType.GetField("PluginVersion",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+
+                if (versionField == null)
+                {
+                    // Try Constants class instead
+                    var constantsType = allTypes.FirstOrDefault(t =>
+                        t.Name == "Constants" && t.Namespace == "PotatoOptimization.Core");
+
+                    if (constantsType != null)
+                    {
+                        versionField = constantsType.GetField("PluginVersion",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    }
+                }
+
+                if (versionField != null)
+                {
+                    string version = versionField.GetValue(null) as string;
+                    if (!string.IsNullOrEmpty(version))
+                    {
+                        // Ensure it starts with 'v'
+                        return version.StartsWith("v") ? version : $"v{version}";
+                    }
+                }
+
+                ChillEnvPlugin.Log?.LogWarning("[Weather MOD] Version field not found, using fallback");
+                return "v?.?.?";
+            }
+            catch (System.Exception ex)
+            {
+                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Failed to get iGPU Savior version: {ex.Message}");
+                return "v?.?.?";
+            }
+        }
         private static void PlayClickSound()
         {
             if (cachedSettingUI == null) return;
