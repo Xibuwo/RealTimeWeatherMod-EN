@@ -20,6 +20,7 @@ namespace ChillWithYou.EnvSync.UI
         private static SettingUI cachedSettingUI;
         private static Canvas _rootCanvas;
         private static bool _integratedWithIGPU = false;
+        private static Type _cachedPulldownUIType;
 
         static void Postfix(SettingUI __instance)
         {
@@ -757,7 +758,9 @@ namespace ChillWithYou.EnvSync.UI
             colors.selectedColor = new Color(0.25f, 0.25f, 0.25f, 1f);
             inputField.colors = colors;
         }
-        static void CreateWeatherProviderDropdown(Transform parent, SettingUI settingUI)
+
+        static void CreateGenericDropdown(Transform parent, SettingUI settingUI, string dropdownName, string titleText,
+    string[] options, int currentIndex, System.Action<int> onValueChanged)
         {
             try
             {
@@ -768,7 +771,7 @@ namespace ChillWithYou.EnvSync.UI
                 if (originalDropdown == null) return;
 
                 GameObject dropdown = Object.Instantiate(originalDropdown.gameObject);
-                dropdown.name = "WeatherProviderDropdown";
+                dropdown.name = dropdownName;
                 dropdown.transform.SetParent(parent, false);
 
                 var hGroup = dropdown.GetComponent<HorizontalLayoutGroup>();
@@ -788,6 +791,7 @@ namespace ChillWithYou.EnvSync.UI
                 dropdownLayout.minHeight = 60f;
                 dropdownLayout.flexibleWidth = 1f;
 
+                // Set title
                 var titlePaths = new[] { "TitleText", "Title/Text", "Text" };
                 foreach (var path in titlePaths)
                 {
@@ -797,7 +801,7 @@ namespace ChillWithYou.EnvSync.UI
                         var tmp = titleTransform.GetComponent<TMP_Text>();
                         if (tmp != null)
                         {
-                            tmp.text = "Weather Provider";
+                            tmp.text = titleText;
                             break;
                         }
                     }
@@ -806,6 +810,7 @@ namespace ChillWithYou.EnvSync.UI
                 Transform content = dropdown.transform.Find("PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
                 if (content == null) return;
 
+                // Clear existing children
                 int childCount = content.childCount;
                 for (int i = childCount - 1; i >= 0; i--)
                 {
@@ -821,19 +826,17 @@ namespace ChillWithYou.EnvSync.UI
                     buttonTemplate.name = "SelectButtonTemplate";
                     buttonTemplate.SetActive(false);
 
-                    string[] providerOptions = { "Seniverse", "OpenWeather" };
-                    int currentIndex = ChillEnvPlugin.Cfg_WeatherProvider.Value.Equals("OpenWeather", System.StringComparison.OrdinalIgnoreCase) ? 1 : 0;
-
-                    for (int i = 0; i < providerOptions.Length; i++)
+                    // Create buttons for each option
+                    for (int i = 0; i < options.Length; i++)
                     {
                         GameObject newButton = Object.Instantiate(buttonTemplate, content);
-                        newButton.name = $"SelectButton_{providerOptions[i]}";
+                        newButton.name = $"SelectButton_{options[i]}";
                         newButton.SetActive(true);
 
                         TMP_Text buttonText = newButton.GetComponentInChildren<TMP_Text>();
                         if (buttonText != null)
                         {
-                            buttonText.text = providerOptions[i];
+                            buttonText.text = options[i];
                         }
 
                         var images = newButton.GetComponentsInChildren<Image>(true);
@@ -849,14 +852,10 @@ namespace ChillWithYou.EnvSync.UI
                             button.onClick.RemoveAllListeners();
                             button.onClick.AddListener(() =>
                             {
-                                ChillEnvPlugin.Cfg_WeatherProvider.Value = providerOptions[index];
-                                ChillEnvPlugin.Instance.Config.Save();
-                                ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providerOptions[index]}");
-
-                                UpdateDropdownSelectedText(dropdown, providerOptions[index]);
+                                onValueChanged?.Invoke(index);
+                                UpdateDropdownSelectedText(dropdown, options[index]);
                                 CloseDropdown(dropdown);
                                 PlayClickSound();
-                                TriggerForceRefresh();
                             });
 
                             if (!button.interactable) button.interactable = true;
@@ -869,7 +868,9 @@ namespace ChillWithYou.EnvSync.UI
                     }
 
                     Object.Destroy(buttonTemplate);
-                    UpdateDropdownSelectedText(dropdown, providerOptions[currentIndex]);
+                    UpdateDropdownSelectedText(dropdown, options[currentIndex]);
+
+                    // Wait for buttons to be properly instantiated before configuring UI
                     WeatherModUIRunner.Instance.RunDelayed(0.1f, () => {
                         ConfigureDropdownUI(dropdown, originalDropdown, content);
                     });
@@ -878,142 +879,45 @@ namespace ChillWithYou.EnvSync.UI
             }
             catch (System.Exception e)
             {
-                ChillEnvPlugin.Log?.LogError($"CreateWeatherProviderDropdown failed: {e.Message}");
+                ChillEnvPlugin.Log?.LogError($"Create{dropdownName} failed: {e.Message}");
             }
+        }
+        static void CreateWeatherProviderDropdown(Transform parent, SettingUI settingUI)
+        {
+            string[] providerOptions = { "Seniverse", "OpenWeather" };
+            int currentIndex = ChillEnvPlugin.Cfg_WeatherProvider.Value.Equals("OpenWeather",
+                System.StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+
+            CreateGenericDropdown(parent, settingUI, "WeatherProviderDropdown", "Weather Provider",
+                providerOptions, currentIndex, (index) => {
+                    string[] providers = { "Seniverse", "OpenWeather" };
+                    ChillEnvPlugin.Cfg_WeatherProvider.Value = providers[index];
+                    ChillEnvPlugin.Instance.Config.Save();
+                    ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providers[index]}");
+                    TriggerForceRefresh();
+                });
         }
 
         static void CreateTemperatureDropdown(Transform parent, SettingUI settingUI)
         {
-            try
-            {
-                Transform graphicsContent = settingUI.transform.Find("Graphics/ScrollView/Viewport/Content");
-                if (graphicsContent == null) return;
+            string[] tempOptions = { "Celsius (°C)", "Fahrenheit (°F)", "Kelvin (K)" };
+            string[] tempUnits = { "Celsius", "Fahrenheit", "Kelvin" };
 
-                Transform originalDropdown = graphicsContent.Find("GraphicQualityPulldownList");
-                if (originalDropdown == null) return;
+            string currentUnit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
+            int currentIndex = 0;
+            if (currentUnit.Equals("Fahrenheit", System.StringComparison.OrdinalIgnoreCase))
+                currentIndex = 1;
+            else if (currentUnit.Equals("Kelvin", System.StringComparison.OrdinalIgnoreCase))
+                currentIndex = 2;
 
-                GameObject dropdown = Object.Instantiate(originalDropdown.gameObject);
-                dropdown.name = "TemperatureUnitDropdown";
-                dropdown.transform.SetParent(parent, false);
-
-                var hGroup = dropdown.GetComponent<HorizontalLayoutGroup>();
-                if (hGroup != null)
-                {
-                    hGroup.spacing = 10f;
-                    hGroup.childAlignment = TextAnchor.MiddleCenter;
-                    hGroup.childForceExpandWidth = false;
-                }
-
-                dropdown.SetActive(false);
-
-                var dropdownLayout = dropdown.GetComponent<LayoutElement>();
-                if (dropdownLayout == null)
-                    dropdownLayout = dropdown.AddComponent<LayoutElement>();
-                dropdownLayout.preferredHeight = 60f;
-                dropdownLayout.minHeight = 60f;
-                dropdownLayout.flexibleWidth = 1f;
-
-                var titlePaths = new[] { "TitleText", "Title/Text", "Text" };
-                foreach (var path in titlePaths)
-                {
-                    var titleTransform = dropdown.transform.Find(path);
-                    if (titleTransform != null)
-                    {
-                        var tmp = titleTransform.GetComponent<TMP_Text>();
-                        if (tmp != null)
-                        {
-                            tmp.text = "Temperature Unit";
-                            break;
-                        }
-                    }
-                }
-
-                Transform content = dropdown.transform.Find("PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
-                if (content == null) return;
-
-                int childCount = content.childCount;
-                for (int i = childCount - 1; i >= 0; i--)
-                {
-                    Object.Destroy(content.GetChild(i).gameObject);
-                }
-
-                content.gameObject.SetActive(true);
-
-                Transform firstButton = graphicsContent.Find("GraphicQualityPulldownList/PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
-                if (firstButton != null && firstButton.childCount > 0)
-                {
-                    GameObject buttonTemplate = Object.Instantiate(firstButton.GetChild(0).gameObject);
-                    buttonTemplate.name = "SelectButtonTemplate";
-                    buttonTemplate.SetActive(false);
-
-                    string[] tempOptions = { "Celsius (°C)", "Fahrenheit (°F)", "Kelvin (K)" };
-                    string[] tempUnits = { "Celsius", "Fahrenheit", "Kelvin" };
-
-                    string currentUnit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
-                    int currentIndex = 0;
-                    if (currentUnit.Equals("Fahrenheit", System.StringComparison.OrdinalIgnoreCase))
-                        currentIndex = 1;
-                    else if (currentUnit.Equals("Kelvin", System.StringComparison.OrdinalIgnoreCase))
-                        currentIndex = 2;
-
-                    for (int i = 0; i < tempOptions.Length; i++)
-                    {
-                        GameObject newButton = Object.Instantiate(buttonTemplate, content);
-                        newButton.name = $"SelectButton_{tempOptions[i]}";
-                        newButton.SetActive(true);
-
-                        TMP_Text buttonText = newButton.GetComponentInChildren<TMP_Text>();
-                        if (buttonText != null)
-                        {
-                            buttonText.text = tempOptions[i];
-                        }
-
-                        var images = newButton.GetComponentsInChildren<Image>(true);
-                        foreach (var img in images)
-                        {
-                            img.raycastTarget = true;
-                        }
-
-                        Button button = newButton.GetComponent<Button>();
-                        if (button != null)
-                        {
-                            int index = i;
-                            button.onClick.RemoveAllListeners();
-                            button.onClick.AddListener(() =>
-                            {
-                                ChillEnvPlugin.Cfg_TemperatureUnit.Value = tempUnits[index];
-                                ChillEnvPlugin.Instance.Config.Save();
-                                ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Temperature unit changed to: {tempUnits[index]}");
-
-                                UpdateDropdownSelectedText(dropdown, tempOptions[index]);
-                                CloseDropdown(dropdown);
-                                PlayClickSound();
-                                TriggerForceRefresh();
-                            });
-
-                            if (!button.interactable) button.interactable = true;
-                            if (button.targetGraphic == null)
-                            {
-                                var graphic = newButton.GetComponent<Image>();
-                                if (graphic != null) button.targetGraphic = graphic;
-                            }
-                        }
-                    }
-
-                    Object.Destroy(buttonTemplate);
-                    UpdateDropdownSelectedText(dropdown, tempOptions[currentIndex]);
-                    WeatherModUIRunner.Instance.RunDelayed(0.1f, () => {
-                        ConfigureDropdownUI(dropdown, originalDropdown, content);
-                    });
-                }
-                dropdown.SetActive(true);
-            }
-            catch (System.Exception e)
-            {
-                ChillEnvPlugin.Log?.LogError($"CreateTemperatureDropdown failed: {e.Message}");
-            }
+            CreateGenericDropdown(parent, settingUI, "TemperatureUnitDropdown", "Temperature Unit",
+                tempOptions, currentIndex, (index) => {
+                    ChillEnvPlugin.Cfg_TemperatureUnit.Value = tempUnits[index];
+                    ChillEnvPlugin.Instance.Config.Save();
+                    ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Temperature unit changed to: {tempUnits[index]}");
+                    TriggerForceRefresh();
+                });
         }
-
         static void UpdateDropdownSelectedText(GameObject dropdown, string text)
         {
             var paths = new[] { "PulldownList/Pulldown/CurrentSelectText (TMP)", "CurrentSelectText (TMP)" };
@@ -1060,13 +964,17 @@ namespace ChillWithYou.EnvSync.UI
         {
             try
             {
-                var pulldownUIType = System.AppDomain.CurrentDomain.GetAssemblies()
-                    .SelectMany(a => {
-                        try { return a.GetTypes(); }
-                        catch { return new System.Type[0]; }
-                    })
-                    .FirstOrDefault(t => t.Name == "PulldownListUI");
+                if (_cachedPulldownUIType == null)
+                {
+                    _cachedPulldownUIType = System.AppDomain.CurrentDomain.GetAssemblies()
+                        .SelectMany(a => {
+                            try { return a.GetTypes(); }
+                            catch { return new System.Type[0]; }
+                        })
+                        .FirstOrDefault(t => t.Name == "PulldownListUI");
+                }
 
+                var pulldownUIType = _cachedPulldownUIType;
                 if (pulldownUIType == null) return;
 
                 Transform pulldownList = dropdown.transform.Find("PulldownList");
