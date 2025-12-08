@@ -1,11 +1,14 @@
-using HarmonyLib;
-using UnityEngine;
-using UnityEngine.UI;
 using Bulbul;
-using TMPro;
+using HarmonyLib;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
+using Object = UnityEngine.Object;
 
 namespace ChillWithYou.EnvSync.UI
 {
@@ -867,7 +870,9 @@ namespace ChillWithYou.EnvSync.UI
 
                     Object.Destroy(buttonTemplate);
                     UpdateDropdownSelectedText(dropdown, providerOptions[currentIndex]);
-                    ConfigureDropdownUI(dropdown, originalDropdown, content);
+                    WeatherModUIRunner.Instance.RunDelayed(0.1f, () => {
+                        ConfigureDropdownUI(dropdown, originalDropdown, content);
+                    });
                 }
                 dropdown.SetActive(true);
             }
@@ -997,7 +1002,9 @@ namespace ChillWithYou.EnvSync.UI
 
                     Object.Destroy(buttonTemplate);
                     UpdateDropdownSelectedText(dropdown, tempOptions[currentIndex]);
-                    ConfigureDropdownUI(dropdown, originalDropdown, content);
+                    WeatherModUIRunner.Instance.RunDelayed(0.1f, () => {
+                        ConfigureDropdownUI(dropdown, originalDropdown, content);
+                    });
                 }
                 dropdown.SetActive(true);
             }
@@ -1079,14 +1086,17 @@ namespace ChillWithYou.EnvSync.UI
 
                 if (pulldownButtonComp == null || currentSelectTextComp == null || pulldownParentRect == null) return;
 
+                // === NEW CODE: Dynamic height calculation ===
                 void SetField(string fieldName, object value)
                 {
                     if (value == null) return;
-                    pulldownUIType.GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(pulldownUI, value);
+                    pulldownUIType.GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(pulldownUI, value);
                 }
 
+                // Calculate exact height needed
                 int childCount = content.childCount;
                 float itemHeight = 40f;
+
                 if (childCount > 0)
                 {
                     var firstChild = content.GetChild(0).GetComponent<RectTransform>();
@@ -1094,20 +1104,85 @@ namespace ChillWithYou.EnvSync.UI
                 }
 
                 float realContentHeight = childCount * itemHeight;
-                float finalViewHeight = realContentHeight;
+
+                // Determine if scrolling is needed
+                float maxVisibleItems = 6f;
+                float maxViewHeight = maxVisibleItems * itemHeight;
+                bool needsScroll = realContentHeight > maxViewHeight;
+                float finalViewHeight = needsScroll ? maxViewHeight : realContentHeight;
+
+                // Calculate animation target height
                 float headerHeight = pulldownParentRect.rect.height;
                 float openSize = headerHeight + finalViewHeight + 10f;
 
-                if (contentRect != null)
+                // Set Content positioning based on scroll requirement
+                if (needsScroll)
                 {
-                    contentRect.anchorMin = Vector2.zero;
-                    contentRect.anchorMax = new Vector2(1f, 0f);
-                    contentRect.pivot = new Vector2(0.5f, 1f);
-                    contentRect.sizeDelta = new Vector2(0, realContentHeight);
-                    contentRect.anchoredPosition = Vector2.zero;
+                    // Ensure VerticalLayoutGroup forces width expansion
+                    var vlg = content.GetComponent<VerticalLayoutGroup>();
+                    if (vlg != null)
+                    {
+                        vlg.childControlWidth = true;
+                        vlg.childForceExpandWidth = true;
+                    }
+
+                    // Check if already in Viewport
+                    if (content.parent.name != "Viewport")
+                    {
+                        GameObject scrollView = new GameObject("ScrollView", typeof(RectTransform));
+                        scrollView.transform.SetParent(content.parent, false);
+
+                        var scrollRectRT = scrollView.GetComponent<RectTransform>();
+                        scrollRectRT.anchorMin = Vector2.zero;
+                        scrollRectRT.anchorMax = new Vector2(1f, 0f);
+                        scrollRectRT.pivot = new Vector2(0.5f, 1f);
+                        scrollRectRT.sizeDelta = new Vector2(0, finalViewHeight);
+                        scrollRectRT.anchoredPosition = Vector2.zero;
+
+                        var scrollRect = scrollView.AddComponent<ScrollRect>();
+                        scrollRect.horizontal = false;
+                        scrollRect.vertical = true;
+                        scrollRect.scrollSensitivity = 20f;
+                        scrollRect.movementType = ScrollRect.MovementType.Clamped;
+
+                        GameObject viewport = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+                        viewport.transform.SetParent(scrollView.transform, false);
+                        var viewRect = viewport.GetComponent<RectTransform>();
+                        viewRect.anchorMin = Vector2.zero;
+                        viewRect.anchorMax = Vector2.one;
+                        viewRect.sizeDelta = Vector2.zero;
+
+                        content.SetParent(viewport.transform, true);
+
+                        scrollRect.viewport = viewRect;
+                        scrollRect.content = contentRect;
+
+                        // Content positioning for scrolling mode
+                        contentRect.anchorMin = new Vector2(0, 1);
+                        contentRect.anchorMax = new Vector2(1, 1);
+                        contentRect.pivot = new Vector2(0.5f, 1f);
+                        contentRect.anchoredPosition = Vector2.zero;
+                        contentRect.sizeDelta = new Vector2(0, realContentHeight);
+
+                        var fitter = content.GetComponent<ContentSizeFitter>();
+                        if (fitter == null) fitter = content.gameObject.AddComponent<ContentSizeFitter>();
+                        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+                    }
+                }
+                else
+                {
+                    // Non-scrolling case: bottom-aligned
+                    if (contentRect != null)
+                    {
+                        contentRect.anchorMin = Vector2.zero;
+                        contentRect.anchorMax = new Vector2(1f, 0f);
+                        contentRect.pivot = new Vector2(0.5f, 1f);
+                        contentRect.sizeDelta = new Vector2(0, realContentHeight);
+                        contentRect.anchoredPosition = Vector2.zero;
+                    }
                 }
 
-                // Add Canvas to ROOT object (not child panels)
+                // Add Canvas to ROOT object
                 Canvas rootCanvas = dropdown.GetComponent<Canvas>();
                 if (rootCanvas == null)
                 {
@@ -1122,19 +1197,18 @@ namespace ChillWithYou.EnvSync.UI
                 }
                 else
                 {
-                    // Ensure existing canvas is reset
                     rootCanvas.overrideSorting = false;
                     rootCanvas.sortingOrder = 0;
                 }
 
-                // Add the dynamic layer controller
+                // Add dynamic layer controller
                 var layerController = dropdown.GetComponent<PulldownLayerController>();
                 if (layerController == null)
                     layerController = dropdown.AddComponent<PulldownLayerController>();
 
-                // Initialize with the component we found earlier (pulldownUI) and the canvas
                 layerController.Initialize(pulldownUI, rootCanvas);
 
+                // Set PulldownUI fields
                 SetField("_currentSelectContentText", currentSelectTextComp);
                 SetField("_pullDownParentRect", pulldownParentRect);
                 SetField("_openPullDownSizeDeltaY", openSize);
@@ -1145,7 +1219,7 @@ namespace ChillWithYou.EnvSync.UI
 
                 pulldownUIType.GetMethod("Setup")?.Invoke(pulldownUI, null);
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
                 ChillEnvPlugin.Log?.LogError($"ConfigureDropdownUI failed: {e.Message}");
             }
