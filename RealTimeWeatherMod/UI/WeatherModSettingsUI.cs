@@ -190,12 +190,55 @@ namespace ChillWithYou.EnvSync.UI
                     modContent = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
                 }
 
-                // === Add custom input fields MANUALLY (bypassing ModSettingsManager) ===
                 if (modContent != null)
                 {
-                    WeatherModUIRunner.Instance.RunDelayed(0.65f, () =>
+                    WeatherModUIRunner.Instance.RunDelayed(0.75f, () =>
                     {
-                        CreateSubHeader(modContent, "API Configuration");
+                        if (modContent == null)
+                        {
+                            ChillEnvPlugin.Log?.LogError("[Weather MOD] modContent is null, cannot add input fields");
+                            return;
+                        }
+
+                        Transform insertionPoint = null;
+                        for (int i = modContent.childCount - 1; i >= 0; i--)
+                        {
+                            var child = modContent.GetChild(i);
+                            var textComponents = child.GetComponentsInChildren<TextMeshProUGUI>(true);
+                            foreach (var text in textComponents)
+                            {
+                                if (text.text.Contains("Portrait Mode Hotkey") || text.text.Contains("竖屏优化快捷键"))
+                                {
+                                    insertionPoint = child;
+                                    ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Found Portrait Mode Hotkey at index {i}");
+                                    break;
+                                }
+                            }
+                            if (insertionPoint != null) break;
+                        }
+
+                        GameObject headerObj = new GameObject("SubHeader_API Configuration");
+                        headerObj.transform.SetParent(modContent, false);
+
+                        var rect = headerObj.AddComponent<RectTransform>();
+                        rect.sizeDelta = new Vector2(0, 35);
+
+                        var le = headerObj.AddComponent<LayoutElement>();
+                        le.minHeight = 35f;
+                        le.preferredHeight = 35f;
+                        le.flexibleWidth = 1f;
+
+                        var tmp = headerObj.AddComponent<TextMeshProUGUI>();
+                        tmp.text = "<size=16><color=#AAAAAA>API Configuration</color></size>";
+                        tmp.alignment = TextAlignmentOptions.Center;
+                        tmp.color = new Color(0.67f, 0.67f, 0.67f, 1f);
+
+                        if (insertionPoint != null)
+                        {
+                            int targetIndex = insertionPoint.GetSiblingIndex() + 1;
+                            headerObj.transform.SetSiblingIndex(targetIndex);
+                            ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Placed API header at index {targetIndex}");
+                        }
 
                         CreateInputField(modContent, cachedSettingUI, "Location",
                             ChillEnvPlugin.Cfg_Location.Value,
@@ -206,6 +249,12 @@ namespace ChillWithYou.EnvSync.UI
                                 TriggerForceRefresh();
                             });
 
+                        if (insertionPoint != null)
+                        {
+                            int targetIndex = insertionPoint.GetSiblingIndex() + 2;
+                            modContent.GetChild(modContent.childCount - 1).SetSiblingIndex(targetIndex);
+                        }
+
                         CreateInputField(modContent, cachedSettingUI, "API Key",
                             ChillEnvPlugin.Cfg_GeneralAPI.Value,
                             (newValue) => {
@@ -215,12 +264,19 @@ namespace ChillWithYou.EnvSync.UI
                                 ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] API Key updated");
                                 TriggerForceRefresh();
                             },
-                            true); // Password mode
+                            true);
 
-                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Custom input fields added");
+                        if (insertionPoint != null)
+                        {
+                            int targetIndex = insertionPoint.GetSiblingIndex() + 3;
+                            modContent.GetChild(modContent.childCount - 1).SetSiblingIndex(targetIndex);
+                        }
+
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Custom input fields added and positioned correctly");
+
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(modContent as RectTransform);
                     });
                 }
-
                 var addDropdownMethod = managerType.GetMethod("AddDropdown");
                 if (addDropdownMethod != null)
                 {
@@ -353,6 +409,10 @@ namespace ChillWithYou.EnvSync.UI
                                         }
                                     }
                                 }
+
+                                WeatherModUIRunner.Instance.RunDelayed(0.5f, () => TranslateIGPUSaviorLabels(cachedSettingUI));
+                                WeatherModUIRunner.Instance.RunDelayed(1.0f, () => TranslateIGPUSaviorLabels(cachedSettingUI));
+                                WeatherModUIRunner.Instance.RunDelayed(1.5f, () => TranslateIGPUSaviorLabels(cachedSettingUI));
 
                                 if (contentTransform != null)
                                 {
@@ -1298,6 +1358,120 @@ namespace ChillWithYou.EnvSync.UI
                 LayoutRebuilder.ForceRebuildLayoutImmediate(modContentParent.GetComponent<RectTransform>());
                 scrollRect.verticalNormalizedPosition = 1f;
             }
+        }
+        static void TranslateIGPUSaviorLabels(SettingUI settingUI)
+        {
+            try
+            {
+                var modContent = settingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
+                if (modContent == null)
+                {
+                    ChillEnvPlugin.Log?.LogWarning("[Translation] MOD content not found");
+                    return;
+                }
+
+                // Dictionary of Chinese to English translations
+                var translations = new Dictionary<string, string>
+        {
+            // iGPU Savior settings
+            {"镜像自启动", "Auto-Enable Mirror"},
+            {"小窗缩放", "Window Scale Ratio"},
+            {"小窗拖动模式", "Window Drag Mode"},
+            {"土豆模式快捷键", "Potato Mode Hotkey"},
+            {"小窗模式快捷键", "PiP Mode Hotkey"},
+            {"镜像模式快捷键", "Mirror Mode Hotkey"},
+            {"竖屏优化快捷键", "Portrait Mode Hotkey"},
+            
+            // Dropdown options
+            {"Ctrl + 左键", "Ctrl + Left Click"},
+            {"Alt + 左键", "Alt + Left Click"},
+            {"右键按住", "Right Click Hold"},
+            
+            // Headers (if present)
+            {"快捷键配置", "Hotkey Configuration"},
+            {"相机配置", "Camera Settings"},
+            {"窗口配置", "Window Settings"}
+        };
+
+                // Find all TextMeshProUGUI components in the content area
+                var allTexts = modContent.GetComponentsInChildren<TextMeshProUGUI>(true);
+                int translatedCount = 0;
+
+                foreach (var textComponent in allTexts)
+                {
+                    if (textComponent == null || string.IsNullOrEmpty(textComponent.text))
+                        continue;
+
+                    string originalText = textComponent.text;
+                    bool wasTranslated = false;
+
+                    // Try exact match first
+                    foreach (var pair in translations)
+                    {
+                        if (originalText.Equals(pair.Key, System.StringComparison.Ordinal))
+                        {
+                            textComponent.text = pair.Value;
+                            translatedCount++;
+                            wasTranslated = true;
+                            ChillEnvPlugin.Log?.LogDebug($"[Translation] Exact match: '{pair.Key}' → '{pair.Value}'");
+                            break;
+                        }
+                    }
+
+                    // If no exact match, try contains (for formatted text)
+                    if (!wasTranslated)
+                    {
+                        foreach (var pair in translations)
+                        {
+                            if (originalText.Contains(pair.Key))
+                            {
+                                textComponent.text = originalText.Replace(pair.Key, pair.Value);
+                                translatedCount++;
+                                wasTranslated = true;
+                                ChillEnvPlugin.Log?.LogDebug($"[Translation] Partial match: '{pair.Key}' → '{pair.Value}'");
+                                break;
+                            }
+                        }
+                    }
+
+                    // Log untranslated Chinese text for debugging
+                    if (!wasTranslated && ContainsChinese(originalText))
+                    {
+                        ChillEnvPlugin.Log?.LogWarning($"[Translation] Untranslated Chinese text found: '{originalText}'");
+                    }
+                }
+
+                if (translatedCount > 0)
+                {
+                    ChillEnvPlugin.Log?.LogInfo($"[Translation] Successfully translated {translatedCount} iGPU Savior labels to English");
+
+                    if (modContent != null)
+                    {
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(modContent as RectTransform);
+                    }
+                }
+                else
+                {
+                    ChillEnvPlugin.Log?.LogWarning("[Translation] No labels were translated");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ChillEnvPlugin.Log?.LogError($"[Translation] Failed to translate labels: {ex.Message}");
+            }
+        }
+
+        // Helper method to detect Chinese characters
+        static bool ContainsChinese(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+
+            foreach (char c in text)
+            {
+                if (c >= 0x4E00 && c <= 0x9FFF) // Common CJK Unified Ideographs range
+                    return true;
+            }
+            return false;
         }
 
         private static void PlayClickSound()
