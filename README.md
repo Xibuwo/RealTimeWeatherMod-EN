@@ -243,6 +243,10 @@ The plugin automatically switches base environments based on your configured (or
 
 ## 📝 Version History
 
+### v5.4.1
+- Added default key
+- Minor changes
+
 ### v5.4.0
 - Complete UI overhaul with in-game configuration support
 - Added input fields for Location and API Key (no more manual config editing!)
