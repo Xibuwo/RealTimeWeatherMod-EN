@@ -136,7 +136,7 @@ Location = 40.7128,-74.0060
 *General Settings:*
 ```ini
 [WeatherSync]
-RefreshMinutes = 10
+RefreshMinutes = 15
 
 [Temperature]
 TemperatureUnit = Celsius
@@ -191,7 +191,7 @@ The plugin automatically switches base environments based on your configured (or
 ### Weather Sync Mode (Requires Manual Enable)
 1. Configure your API Key and Location as described above.
 2. Set `EnableWeatherSync = true`.
-3. The plugin will fetch weather data at the interval set by `RefreshMinutes` (default: 10).
+3. The plugin will fetch weather data at the interval set by `RefreshMinutes` (default: 15).
 
 4. **Weather Severity Logic**:
    - **Normal Weather**: Day, Sunset, and Night switch as per the basic time cycle.
