@@ -89,7 +89,7 @@ namespace ChillWithYou.EnvSync
 
         private void InitConfig()
         {
-            Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 10, "Weather API refresh interval (minutes)");
+            Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 15, "Weather API refresh interval (minutes)");
             Cfg_SunriseTime = Config.Bind("TimeConfig", "Sunrise", "06:30", "Sunrise time");
             Cfg_SunsetTime = Config.Bind("TimeConfig", "Sunset", "18:30", "Sunset time");
             Cfg_GeneralAPI = Config.Bind("WeatherAPI", "GeneralAPI", "fb54bc28f5545a10b8e5421869cf3bc5", "General API Key, put your API Key here (The GeneralAPI Key is the same as APIKey, which means, you have to put your API on both)");
