@@ -1,10 +1,11 @@
+using Bulbul;
+using ChillWithYou.EnvSync;
+using ChillWithYou.EnvSync.Core;
+using ChillWithYou.EnvSync.Utils;
+using HarmonyLib;
 using System;
 using System.Reflection;
-using HarmonyLib;
-using Bulbul;
 using TMPro;
-using ChillWithYou.EnvSync.Utils;
-using ChillWithYou.EnvSync.Core;
 
 namespace ChillWithYou.EnvSync.Patches
 {
@@ -18,23 +19,23 @@ namespace ChillWithYou.EnvSync.Patches
         }
     }
 
-    [HarmonyPatch(typeof(EnviromentController), "Setup")]
+    [HarmonyPatch(typeof(EnvironmentController), "Setup")]
     internal static class EnvControllerPatch
     {
-        static void Postfix(EnviromentController __instance)
+        static void Postfix(EnvironmentController __instance)
         {
             EnvRegistry.Register(__instance.EnvironmentType, __instance);
         }
     }
 
-    [HarmonyPatch(typeof(FacilityEnviroment), "Setup")]
+    [HarmonyPatch(typeof(FacilityEnvironment), "Setup")]
     internal static class FacilityEnvPatch
     {
-        static void Postfix(FacilityEnviroment __instance)
+        static void Postfix(FacilityEnvironment __instance)
         {
             try
             {
-                FieldInfo field = typeof(FacilityEnviroment).GetField("_windowViewService", BindingFlags.Instance | BindingFlags.NonPublic);
+                FieldInfo field = typeof(FacilityEnvironment).GetField("_windowViewService", BindingFlags.Instance | BindingFlags.NonPublic);
                 if (field != null)
                 {
                     object service = field.GetValue(__instance);
@@ -112,11 +113,11 @@ namespace ChillWithYou.EnvSync.Patches
         }
     }
 
-    [HarmonyPatch(typeof(EnviromentController), "OnClickButtonMainIcon")]
+    [HarmonyPatch(typeof(EnvironmentController), "OnClickButtonMainIcon")]
     internal static class UserInteractionPatch
     {
         public static bool IsSimulatingClick = false;
-        static void Prefix(EnviromentController __instance)
+        static void Prefix(EnvironmentController __instance)
         {
             if (!IsSimulatingClick)
             {
@@ -139,6 +140,48 @@ namespace ChillWithYou.EnvSync.Patches
                     ChillEnvPlugin.Log?.LogInfo("[Whale Easter Egg] User manually closed system-triggered whale, flag cleared");
                 }
             }
+        }
+    }
+}
+[HarmonyPatch]
+internal static class UnlockStatusMonitorPatch
+{
+    // Try to monitor _isLocked Value setter
+    static System.Collections.Generic.IEnumerable<MethodBase> TargetMethods()
+    {
+        var results = new System.Collections.Generic.List<MethodBase>();
+        try
+        {
+            // Find all places that might modify _isLocked
+            var assembly = typeof(UnlockItemService).Assembly;
+            foreach (var type in assembly.GetTypes())
+            {
+                if (type.Name.Contains("UnlockEnvironmentData") || type.Name.Contains("UnlockDecorationData"))
+                {
+                    var methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    foreach (var method in methods)
+                    {
+                        if (method.Name.Contains("Lock") || method.Name.Contains("Unlock"))
+                        {
+                            results.Add(method);
+                            ChillEnvPlugin.Log?.LogInfo($"[Monitor] Found unlock-related method: {type.Name}.{method.Name}");
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ChillEnvPlugin.Log?.LogError($"[Monitor] Failed to find target methods: {ex.Message}");
+        }
+        return results;
+    }
+
+    static void Prefix(MethodBase __originalMethod)
+    {
+        if (ChillEnvPlugin.Cfg_DebugMode.Value && ChillEnvPlugin.Initialized)
+        {
+            ChillEnvPlugin.Log?.LogWarning($"[Monitor] Detected unlock status change call: {__originalMethod.DeclaringType?.Name}.{__originalMethod.Name}");
         }
     }
 }
