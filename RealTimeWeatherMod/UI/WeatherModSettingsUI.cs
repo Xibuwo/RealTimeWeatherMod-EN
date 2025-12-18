@@ -246,7 +246,8 @@ namespace ChillWithYou.EnvSync.UI
 
                         CreateInputField(modContent, cachedSettingUI, "Location",
                             ChillEnvPlugin.Cfg_Location.Value,
-                            (newValue) => {
+                            (newValue) =>
+                            {
                                 ChillEnvPlugin.Cfg_Location.Value = newValue;
                                 ChillEnvPlugin.Instance.Config.Save();
                                 ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Location changed to: {newValue}");
@@ -261,7 +262,8 @@ namespace ChillWithYou.EnvSync.UI
 
                         CreateInputField(modContent, cachedSettingUI, "API Key",
                             ChillEnvPlugin.Cfg_GeneralAPI.Value,
-                            (newValue) => {
+                            (newValue) =>
+                            {
                                 ChillEnvPlugin.Cfg_GeneralAPI.Value = newValue;
                                 ChillEnvPlugin.Cfg_ApiKey.Value = newValue;
                                 ChillEnvPlugin.Instance.Config.Save();
@@ -384,6 +386,16 @@ namespace ChillWithYou.EnvSync.UI
                     });
                 }
 
+                addToggleMethod.Invoke(managerInstance, new object[] {
+                        "Unlock Purchasable Items",
+                        ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value,
+                        (System.Action<bool>)((val) => {
+                            ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value = val;
+                            ChillEnvPlugin.Instance.Config.Save();
+                            ChillEnvPlugin.Log?.LogWarning("Please restart the game for purchasable item unlock changes to take effect");
+                        })
+                    });
+            
                 WeatherModUIRunner.Instance.RunDelayed(0.2f, () =>
                 {
                     var rebuildMethod = managerType.GetMethod("RebuildUI");
@@ -535,7 +547,7 @@ namespace ChillWithYou.EnvSync.UI
             {
                 if (content == null || settingUI == null) return;
 
-                CreateSectionHeader(content.transform, "Chill Env Sync", "5.4.0");
+                CreateSectionHeader(content.transform, "Chill Env Sync", "5.4.2");
 
                 Transform audioTabContent = settingUI.transform.Find("MusicAudio/ScrollView/Viewport/Content");
                 if (audioTabContent == null) return;
@@ -631,6 +643,13 @@ namespace ChillWithYou.EnvSync.UI
                         ChillEnvPlugin.Cfg_UnlockDecorations.Value = val;
                         ChillEnvPlugin.Instance.Config.Save();
                         ChillEnvPlugin.Log?.LogWarning("Please restart the game for decoration unlock changes to take effect");
+                    });
+                CreateToggle(content.transform, originalRow, "Unlock Purchasable Items",
+                    ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value,
+                    (val) => {
+                        ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogWarning("Please restart the game for purchasable item unlock changes to take effect");
                     });
 
                 LayoutRebuilder.ForceRebuildLayoutImmediate(content.GetComponent<RectTransform>());
