@@ -9,12 +9,12 @@ using Bulbul;
 
 namespace ChillWithYou.EnvSync
 {
-    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "5.4.0")]
+    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "5.4.2")]
     public class ChillEnvPlugin : BaseUnityPlugin
     {
         internal static ChillEnvPlugin Instance;
         internal static ManualLogSource Log;
-        public const string PluginVersion = "5.4.0";
+        public const string PluginVersion = "5.4.2";
         internal static UnlockItemService UnlockItemServiceInstance;
 
         internal static object WindowViewServiceInstance;
@@ -31,6 +31,7 @@ namespace ChillWithYou.EnvSync
         internal static ConfigEntry<bool> Cfg_EnableWeatherSync;
         internal static ConfigEntry<bool> Cfg_UnlockEnvironments;
         internal static ConfigEntry<bool> Cfg_UnlockDecorations;
+        internal static ConfigEntry<bool> Cfg_UnlockPurchasableItems;
         internal static ConfigEntry<string> Cfg_WeatherProvider;
         internal static ConfigEntry<string> Cfg_GeneralAPI;
 
@@ -57,12 +58,13 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo("【5.4.0】Starting - Weather, Sunrise & Sunset Edition (OpenWeather Support)");
+            Log.LogInfo("【5.4.2】Starting - Weather, Sunrise & Sunset Edition (OpenWeather Support)");
 
             try
             {
                 var harmony = new Harmony("ChillWithYou.EnvSync");
                 harmony.PatchAll();
+                Patches.UnlockConditionGodMode.ApplyPatches(harmony);
             }
             catch (Exception ex)
             {
@@ -101,6 +103,7 @@ namespace ChillWithYou.EnvSync
 
             Cfg_UnlockEnvironments = Config.Bind("Unlock", "UnlockAllEnvironments", true, "Auto unlock environments");
             Cfg_UnlockDecorations = Config.Bind("Unlock", "UnlockAllDecorations", true, "Auto unlock decorations");
+            Cfg_UnlockPurchasableItems = Config.Bind("Unlock", "UnlockPurchasableItems", false, "Auto unlock purchasable items");
 
             Cfg_ShowWeatherOnUI = Config.Bind("UI", "ShowWeatherOnDate", true, "Show weather on date bar");
             Cfg_DetailedTimeSegments = Config.Bind("UI", "DetailedTimeSegments", true, "Show detailed time segments in 12-hour format");
@@ -125,23 +128,135 @@ namespace ChillWithYou.EnvSync
 
             Initialized = true;
             Log?.LogInfo("Initialization complete");
+
+            if (Cfg_DebugMode.Value && Instance != null)
+            {
+                Instance.StartCoroutine(VerifyUnlockAfterDelay(svc, 3f));
+            }
         }
 
-        internal static void CallServiceChangeWeather(EnvironmentType envType)
+        private static System.Collections.IEnumerator VerifyUnlockAfterDelay(UnlockItemService svc, float delay)
         {
-            if (WindowViewServiceInstance == null || ChangeWeatherMethod == null) return;
+            yield return new WaitForSeconds(delay);
+            Log?.LogInfo($"[Debug] Verifying unlock status after {delay} seconds...");
+
+            int lockedEnvCount = 0;
+            int lockedDecoCount = 0;
+
             try
             {
-                var parameters = ChangeWeatherMethod.GetParameters();
-                if (parameters.Length == 0) return;
-                Type windowViewEnumType = parameters[0].ParameterType;
-                object enumValue = Enum.Parse(windowViewEnumType, envType.ToString());
-                ChangeWeatherMethod.Invoke(WindowViewServiceInstance, new object[] { enumValue });
+                var envProp = svc.GetType().GetProperty("Environment");
+                var unlockEnvObj = envProp.GetValue(svc);
+                var dictField = unlockEnvObj.GetType().GetField("_environmentDic", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                var dict = dictField.GetValue(unlockEnvObj) as System.Collections.IDictionary;
+
+                foreach (System.Collections.DictionaryEntry entry in dict)
+                {
+                    var data = entry.Value;
+                    var lockField = data.GetType().GetField("_isLocked", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                    var reactive = lockField.GetValue(data);
+                    var propValue = reactive.GetType().GetProperty("Value");
+                    bool isLocked = (bool)propValue.GetValue(reactive, null);
+                    if (isLocked)
+                    {
+                        lockedEnvCount++;
+                        Log?.LogWarning($"[Debug] ⚠️ Environment {entry.Key} was re-locked!");
+                    }
+                }
             }
-            catch (Exception ex) { Log?.LogError($"Service call failed: {ex.Message}"); }
+            catch (Exception ex) { Log?.LogError($"[Debug] Environment verification failed: {ex.Message}"); }
+
+            try
+            {
+                var decoProp = svc.GetType().GetProperty("Decoration");
+                var unlockDecoObj = decoProp?.GetValue(svc);
+                if (unlockDecoObj != null)
+                {
+                    var dictField = unlockDecoObj.GetType().GetField("_decorationDic", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                    var dict = dictField?.GetValue(unlockDecoObj) as System.Collections.IDictionary;
+
+                    if (dict != null)
+                    {
+                        foreach (System.Collections.DictionaryEntry entry in dict)
+                        {
+                            var data = entry.Value;
+                            var lockField = data.GetType().GetField("_isLocked", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                            var reactive = lockField?.GetValue(data);
+                            if (reactive != null)
+                            {
+                                var propValue = reactive.GetType().GetProperty("Value");
+                                bool isLocked = (bool)propValue.GetValue(reactive, null);
+                                if (isLocked)
+                                {
+                                    lockedDecoCount++;
+                                    Log?.LogWarning($"[Debug] ⚠️ Decoration {entry.Key} was re-locked!");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Log?.LogError($"[Debug] Decoration verification failed: {ex.Message}"); }
+
+            if (lockedEnvCount == 0 && lockedDecoCount == 0)
+            {
+                Log?.LogInfo($"[Debug] ✅ Verification passed: All unlock statuses remain normal");
+            }
+            else
+            {
+                Log?.LogError($"[Debug] ❌ Issues found: {lockedEnvCount} environments and {lockedDecoCount} decorations were re-locked");
+                Log?.LogError($"[Debug] Possible cause: Game reloaded save data after initialization");
+            }
+        }
+        internal static void CallServiceChangeWeather(EnvironmentType envType)
+        {
+            MonoBehaviour targetUI = null;
+
+            Type uiType = AccessTools.TypeByName("Bulbul.EnvironmentUI");
+            if (uiType != null)
+            {
+                var allUIs = UnityEngine.Resources.FindObjectsOfTypeAll(uiType);
+                if (allUIs != null && allUIs.Length > 0)
+                {
+                    foreach (var obj in allUIs)
+                    {
+                        var mono = obj as MonoBehaviour;
+                        if (mono != null && mono.gameObject.scene.rootCount != 0)
+                        {
+                            targetUI = mono;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (targetUI == null) return;
+            try
+            {
+                var changeTimeMethod = AccessTools.Method(targetUI.GetType(), "ChangeTime");
+                if (changeTimeMethod != null)
+                {
+                    var parameters = changeTimeMethod.GetParameters();
+                    if (parameters.Length > 0)
+                    {
+                        Type targetEnumType = parameters[0].ParameterType;
+                        object enumValue = Enum.Parse(targetEnumType, envType.ToString());
+                        changeTimeMethod.Invoke(targetUI, new object[] { enumValue });
+                        Log?.LogInfo($"[Service] 🌧️ Weather switched and state synced: {envType}");
+                    }
+                }
+                else
+                {
+                    Log?.LogError("[Service] ❌ ChangeTime method not found, game version may be incompatible");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log?.LogError($"[Service] ❌ ChangeTime call failed: {ex.Message}");
+            }
         }
 
-        internal static void SimulateClickMainIcon(EnviromentController ctrl)
+        internal static void SimulateClickMainIcon(EnvironmentController ctrl)
         {
             if (ctrl == null) return;
             try
@@ -185,35 +300,75 @@ namespace ChillWithYou.EnvSync
             }
             catch { }
         }
-
         private static void ForceUnlockAllDecorations(UnlockItemService svc)
         {
+            if (svc == null) return;
+
+            Log?.LogInfo("☢️ Launching Universal Unlock Nuclear Bomb v2 (Drill Mode)...");
+            int totalUnlocked = 0;
+
             try
             {
-                var decoProp = svc.GetType().GetProperty("Decoration");
-                if (decoProp == null) return;
-                var unlockDecoObj = decoProp.GetValue(svc);
-                if (unlockDecoObj == null) return;
-                var dictField = unlockDecoObj.GetType().GetField("_decorationDic", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                if (dictField == null) return;
-                var dict = dictField.GetValue(unlockDecoObj) as System.Collections.IDictionary;
-                if (dict == null) return;
-                int count = 0;
-                foreach (System.Collections.DictionaryEntry entry in dict)
+                var serviceFields = AccessTools.GetDeclaredFields(svc.GetType());
+
+                foreach (var field in serviceFields)
                 {
-                    var data = entry.Value;
-                    var lockField = data.GetType().GetField("_isLocked", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                    if (lockField == null) continue;
-                    var reactive = lockField.GetValue(data);
-                    if (reactive == null) continue;
-                    var propValue = reactive.GetType().GetProperty("Value");
-                    if (propValue == null) continue;
-                    propValue.SetValue(reactive, false, null);
-                    count++;
+                    if (field.FieldType.Name.Contains("MasterData") || field.FieldType.Name.Contains("Loader"))
+                        continue;
+
+                    object componentObj = field.GetValue(svc);
+                    if (componentObj == null) continue;
+
+                    var subFields = AccessTools.GetDeclaredFields(componentObj.GetType());
+
+                    foreach (var subField in subFields)
+                    {
+                        if (!typeof(System.Collections.IDictionary).IsAssignableFrom(subField.FieldType)) continue;
+
+                        var dict = subField.GetValue(componentObj) as System.Collections.IDictionary;
+                        if (dict == null || dict.Count == 0) continue;
+
+                        int groupCount = 0;
+
+                        foreach (System.Collections.DictionaryEntry entry in dict)
+                        {
+                            var dataItem = entry.Value;
+                            if (dataItem == null) continue;
+
+                            var lockField = AccessTools.Field(dataItem.GetType(), "_isLocked");
+                            if (lockField == null) continue;
+
+                            var reactiveBool = lockField.GetValue(dataItem);
+                            if (reactiveBool == null) continue;
+
+                            var valueProp = reactiveBool.GetType().GetProperty("Value");
+                            if (valueProp == null) continue;
+
+                            bool isLocked = (bool)valueProp.GetValue(reactiveBool, null);
+                            if (isLocked)
+                            {
+                                valueProp.SetValue(reactiveBool, false, null);
+                                groupCount++;
+                                totalUnlocked++;
+                                if (Cfg_DebugMode.Value)
+                                {
+                                    Log?.LogInfo($"   🔓 Unlocked: {entry.Key} (in {field.Name}.{subField.Name})");
+                                }
+                            }
+                        }
+
+                        if (groupCount > 0)
+                        {
+                            Log?.LogInfo($"✅ Unlocked {groupCount} items in {field.Name} -> {subField.Name}");
+                        }
+                    }
                 }
-                Log?.LogInfo($"✅ Unlocked {count} decorations");
+                Log?.LogInfo($"🎉 Nuclear Bomb v2 deployment complete, total {totalUnlocked} items unlocked!");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log?.LogError($"❌ Universal Unlock v2 failed: {ex}");
+            }
         }
     }
 }
