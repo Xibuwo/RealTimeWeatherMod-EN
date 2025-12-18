@@ -32,6 +32,7 @@ Related mod：[iGPUSaviorMod](https://github.com/Small-tailqwq/iGPUSaviorMod)
   - Session-only, does not modify save files
   - `UnlockAllEnvironments`: Unlocks all environments
   - `UnlockAllDecorations`: Unlocks all decorations
+  - `UnlockPurchasableItems`: Unlocks all the purchasable items
 - ⌨️ **Hotkeys**:
   - `F7` – Force refresh weather (bypasses cache)
   - `F8` – Log current environment status
@@ -154,6 +155,7 @@ EnableSeasonalEasterEggs = true
 [Unlock]
 UnlockAllEnvironments = true
 UnlockAllDecorations = true
+UnlockPurchasableItems = false
 
 [Debug]
 EnableDebugMode = false
@@ -242,6 +244,13 @@ The plugin automatically switches base environments based on your configured (or
   - Reflection (to access internal game systems)
 
 ## 📝 Version History
+
+### v5.4.2
+- Added "Unlock Purchasable Items" system (unlocks items requiring currency)
+- Added configuration toggle for Purchasable Items (requires restart, as always)
+- Improved weather synchronization and refresh reliability
+- Fixed class naming typos and controller registration issues
+- Enhanced unlock verification and debug monitoring
 
 ### v5.4.1
 - Added default key
