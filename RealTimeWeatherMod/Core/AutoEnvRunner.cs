@@ -13,6 +13,7 @@ namespace ChillWithYou.EnvSync.Core
         private float _nextTimeCheckTime;
         private EnvironmentType? _lastAppliedEnv;
         private bool _isFetching;
+        private bool _pendingForceRefresh;
 
         private static readonly EnvironmentType[] BaseEnvironments = new[] { EnvironmentType.Day, EnvironmentType.Sunset, EnvironmentType.Night, EnvironmentType.Cloudy };
         private static readonly EnvironmentType[] SceneryWeathers = new[] { EnvironmentType.ThunderRain, EnvironmentType.HeavyRain, EnvironmentType.LightRain, EnvironmentType.Snow };
@@ -20,6 +21,7 @@ namespace ChillWithYou.EnvSync.Core
 
         private void Start()
         {
+            _instance = this;
             _nextWeatherCheckTime = Time.time + 10f;
             _nextTimeCheckTime = Time.time + 10f;
             ChillEnvPlugin.Log?.LogInfo("Runner starting...");
@@ -99,7 +101,49 @@ namespace ChillWithYou.EnvSync.Core
             if (ChillEnvPlugin.Cfg_DebugMode.Value) ChillEnvPlugin.Log?.LogWarning("【Warning】Debug mode is ON!");
         }
 
-        private void ForceRefreshWeather() { _nextWeatherCheckTime = Time.time + (ChillEnvPlugin.Cfg_WeatherRefreshMinutes.Value * 60f); TriggerSync(true, false); }
+        private void ForceRefreshWeather()
+        {
+            // If currently requesting, queue a refresh to avoid losing force refresh demand
+            if (_isFetching)
+            {
+                _pendingForceRefresh = true;
+                ChillEnvPlugin.Log?.LogInfo("ForceRefresh requested while fetching; queued until current fetch completes");
+                return;
+            }
+
+            _nextWeatherCheckTime = Time.time + (ChillEnvPlugin.Cfg_WeatherRefreshMinutes.Value * 60f);
+            TriggerSync(true, false);
+        }
+
+        private static AutoEnvRunner _instance;
+
+        // In Start() method, add at the beginning:
+        // _instance = this;
+
+        /// <summary>
+        /// Public method: Force refresh weather immediately (for external calls)
+        /// </summary>
+        public static void TriggerWeatherRefresh()
+        {
+            if (_instance != null)
+            {
+                ChillEnvPlugin.Log?.LogInfo("🔄 External weather refresh triggered");
+                _instance.ForceRefreshWeather();
+            }
+        }
+
+        /// <summary>
+        /// Public method: Refresh sunrise/sunset data immediately (for external calls, e.g., city changes)
+        /// </summary>
+        public static void TriggerSunScheduleRefresh()
+        {
+            if (_instance != null)
+            {
+                ChillEnvPlugin.Log?.LogInfo("🌅 External sunrise/sunset refresh triggered");
+                string today = DateTime.Now.ToString("yyyy-MM-dd");
+                _instance.StartCoroutine(_instance.SyncSunScheduleRoutine(today));
+            }
+        }
 
         private void TriggerSync(bool forceApi, bool forceApply)
         {
@@ -122,6 +166,13 @@ namespace ChillWithYou.EnvSync.Core
                         _isFetching = false;
                         if (weather != null) ApplyEnvironment(weather, forceApply);
                         else { ChillEnvPlugin.Log?.LogWarning("[API Error] Falling back to time-based environment."); ApplyTimeBasedEnvironment(forceApply); }
+
+                        // Check if there's a pending force refresh
+                        if (_pendingForceRefresh)
+                        {
+                            _pendingForceRefresh = false;
+                            ForceRefreshWeather();
+                        }
                     }));
                 }
                 else { ApplyEnvironment(WeatherService.CachedWeather, forceApply); }
