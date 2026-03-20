@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Bulbul;
@@ -643,9 +643,8 @@ namespace ChillWithYou.EnvSync.Core
             if (typeProp != null)
             {
               var winType = (WindowViewType)typeProp.GetValue(behaviorObj);
-              if (SaveDataManager.Instance.WindowViewDic.TryGetValue(winType, out var data))
-              {
-                return data.IsActive;
+              if (WindowViewStateAccessor.TryIsWindowViewActive(winType, out var isActive))              {
+                return isActive;
               }
             }
           }
