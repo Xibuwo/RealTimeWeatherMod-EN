@@ -21,6 +21,20 @@ namespace ChillWithYou.EnvSync.UI
         private static Canvas _rootCanvas;
         private static bool _integratedWithIGPU = false;
         private static Type _cachedPulldownUIType;
+        private static TMP_FontAsset GetValidFont()
+        {
+            if (cachedSettingUI == null) return null;
+
+            // Scan all text components and return the first one that has a non-null font
+            foreach (var textComp in cachedSettingUI.GetComponentsInChildren<TextMeshProUGUI>(true))
+            {
+                if (textComp != null && textComp.font != null)
+                {
+                    return textComp.font;
+                }
+            }
+            return null;
+        }
 
         static void Postfix(SettingUI __instance)
         {
@@ -232,7 +246,13 @@ namespace ChillWithYou.EnvSync.UI
                         le.preferredHeight = 35f;
                         le.flexibleWidth = 1f;
 
+                        // Inside RegisterWithIGPU
                         var tmp = headerObj.AddComponent<TextMeshProUGUI>();
+
+                        // --- ROBUST FONT INJECTION ---
+                        var font = GetValidFont();
+                        if (font != null) tmp.font = font;
+
                         tmp.text = "<size=16><color=#AAAAAA>API Configuration</color></size>";
                         tmp.alignment = TextAlignmentOptions.Center;
                         tmp.color = new Color(0.67f, 0.67f, 0.67f, 1f);
@@ -655,9 +675,10 @@ namespace ChillWithYou.EnvSync.UI
                 LayoutRebuilder.ForceRebuildLayoutImmediate(content.GetComponent<RectTransform>());
             });
         }
-        static void CreateInputField(Transform parent, SettingUI settingUI, string label, string initialValue,
-            System.Action<string> onValueChanged, bool isPassword = false)
+        static void CreateInputField(Transform parent, SettingUI settingUI, string label, string initialValue, System.Action<string> onValueChanged, bool isPassword = false)
         {
+            TMP_FontAsset validFont = GetValidFont();
+
             // Create container
             GameObject container = new GameObject($"InputField_{label}");
             container.transform.SetParent(parent, false);
@@ -673,7 +694,6 @@ namespace ChillWithYou.EnvSync.UI
             var hGroup = container.AddComponent<HorizontalLayoutGroup>();
             hGroup.spacing = 30f;
             hGroup.childAlignment = TextAnchor.MiddleCenter;
-
             hGroup.childControlWidth = false;
             hGroup.childControlHeight = true;
             hGroup.childForceExpandWidth = false;
@@ -684,12 +704,12 @@ namespace ChillWithYou.EnvSync.UI
             labelObj.transform.SetParent(container.transform, false);
             var labelRect = labelObj.AddComponent<RectTransform>();
             labelRect.sizeDelta = new Vector2(200, 60);
-
             var labelLayout = labelObj.AddComponent<LayoutElement>();
             labelLayout.minWidth = 200f;
             labelLayout.preferredWidth = 200f;
 
             var labelText = labelObj.AddComponent<TextMeshProUGUI>();
+            if (validFont != null) labelText.font = validFont;
             labelText.text = label;
             labelText.fontSize = 18;
             labelText.alignment = TextAlignmentOptions.MidlineRight;
@@ -698,28 +718,26 @@ namespace ChillWithYou.EnvSync.UI
             // Create input field
             GameObject inputObj = new GameObject("InputField");
             inputObj.transform.SetParent(container.transform, false);
-
             var inputRect = inputObj.AddComponent<RectTransform>();
             inputRect.sizeDelta = new Vector2(450, 45);
-
             var inputLayout = inputObj.AddComponent<LayoutElement>();
             inputLayout.minWidth = 450f;
             inputLayout.preferredWidth = 450f;
             inputLayout.minHeight = 45f;
             inputLayout.preferredHeight = 45f;
 
-            // Add background image
+            // --- INTERACTION FIX ---
             var inputBg = inputObj.AddComponent<Image>();
             inputBg.color = new Color(0.15f, 0.15f, 0.15f, 1f);
+            inputBg.raycastTarget = true; // Ensures the background catches clicks
 
-            // Add input field component
             var inputField = inputObj.AddComponent<TMP_InputField>();
             inputField.textViewport = inputRect;
+            inputField.targetGraphic = inputBg; // Links the Selectable to the hit-box
 
             // Create text component
             GameObject textObj = new GameObject("Text");
             textObj.transform.SetParent(inputObj.transform, false);
-
             var textRect = textObj.AddComponent<RectTransform>();
             textRect.anchorMin = Vector2.zero;
             textRect.anchorMax = Vector2.one;
@@ -727,14 +745,15 @@ namespace ChillWithYou.EnvSync.UI
             textRect.offsetMax = new Vector2(-10, -5);
 
             var textComp = textObj.AddComponent<TextMeshProUGUI>();
+            if (validFont != null) textComp.font = validFont;
             textComp.fontSize = 16;
             textComp.color = Color.white;
             textComp.alignment = TextAlignmentOptions.MidlineLeft;
+            textComp.raycastTarget = false; // Prevents text from blocking clicks
 
             // Create placeholder
             GameObject placeholderObj = new GameObject("Placeholder");
             placeholderObj.transform.SetParent(inputObj.transform, false);
-
             var placeholderRect = placeholderObj.AddComponent<RectTransform>();
             placeholderRect.anchorMin = Vector2.zero;
             placeholderRect.anchorMax = Vector2.one;
@@ -742,15 +761,23 @@ namespace ChillWithYou.EnvSync.UI
             placeholderRect.offsetMax = new Vector2(-10, -5);
 
             var placeholderText = placeholderObj.AddComponent<TextMeshProUGUI>();
+            if (validFont != null) placeholderText.font = validFont;
             placeholderText.text = $"Enter {label}...";
             placeholderText.fontSize = 16;
             placeholderText.color = new Color(0.5f, 0.5f, 0.5f, 1f);
             placeholderText.alignment = TextAlignmentOptions.MidlineLeft;
             placeholderText.fontStyle = FontStyles.Italic;
+            placeholderText.raycastTarget = false; // Prevents text from blocking clicks
 
-            // Configure input field
+            // --- CRASH FIX: STRICT ORDER OF OPERATIONS ---
+            // 1. Link components first
             inputField.textComponent = textComp;
             inputField.placeholder = placeholderText;
+
+            // 2. Assign font asset ONLY AFTER linking the text components
+            if (validFont != null) inputField.fontAsset = validFont;
+
+            // 3. Set text last
             inputField.text = initialValue;
 
             if (isPassword)
@@ -767,7 +794,7 @@ namespace ChillWithYou.EnvSync.UI
                 if (!string.IsNullOrWhiteSpace(value))
                 {
                     onValueChanged?.Invoke(value.Trim());
-                    PlayClickSound();
+                    PlayClickSound(); // Assuming this method exists in your script
                 }
             });
 
@@ -1165,8 +1192,13 @@ namespace ChillWithYou.EnvSync.UI
             le.flexibleWidth = 1f;
 
             var tmp = obj.AddComponent<TextMeshProUGUI>();
+
+            // --- ROBUST FONT INJECTION ---
+            var font = GetValidFont();
+            if (font != null) tmp.font = font;
+
             tmp.text = $"<size=16><color=#AAAAAA>{text}</color></size>";
-            tmp.alignment = TextAlignmentOptions.Center; // Keep text centered
+            tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = new Color(0.67f, 0.67f, 0.67f, 1f);
         }
 
@@ -1184,9 +1216,14 @@ namespace ChillWithYou.EnvSync.UI
             le.flexibleWidth = 1f;
 
             var tmp = obj.AddComponent<TextMeshProUGUI>();
+
+            // --- ROBUST FONT INJECTION ---
+            var font = GetValidFont();
+            if (font != null) tmp.font = font;
+
             string verStr = string.IsNullOrEmpty(version) ? "" : $" <size=16><color=#888888>v{version}</color></size>";
             tmp.text = $"<size=20><b>{name}</b></size>{verStr}";
-            tmp.alignment = TextAlignmentOptions.Center; // Keep text centered
+            tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
         }
         static void CreateToggle(Transform parent, Transform templateRow, string label, bool initialValue, System.Action<bool> onValueChanged)
