@@ -16,6 +16,7 @@ namespace ChillWithYou.EnvSync.Services
         public static WeatherInfo CachedWeather => _cachedWeather;
         private static readonly string _encryptedDefaultKey = "7Mr4YSR87bFvE4zDgj6NbuBKgz4EiPYEnRTQ0RIaeSU=";
         public static bool HasDefaultKey => !string.IsNullOrEmpty(_encryptedDefaultKey);
+        private static int _fetchGeneration = 0;   // incremented to cancel in-flight fetches
 
         private static string NormalizeLocation(string location)
         {
@@ -56,6 +57,7 @@ namespace ChillWithYou.EnvSync.Services
         /// <summary>Clears the weather cache (e.g. when the city is changed).</summary>
         public static void InvalidateCache()
         {
+            ++_fetchGeneration;      // cancel any in-flight fetch
             _cachedWeather = null;
             _lastLocation = null;
             _lastFetchTime = DateTime.MinValue;
@@ -63,31 +65,30 @@ namespace ChillWithYou.EnvSync.Services
 
         public static IEnumerator FetchWeather(string apiKey, string location, bool force, Action<WeatherInfo> onComplete)
         {
-            if (!force && _cachedWeather != null && DateTime.Now - _lastFetchTime < CacheExpiry)
+            string normalizedLocation = NormalizeLocation(location);
+
+            if (!force && HasValidCacheNormalized(normalizedLocation))
             {
                 onComplete?.Invoke(_cachedWeather);
                 yield break;
             }
 
+            // Stamp this fetch with the current generation; any older fetch will self-abort
+            int myGeneration = ++_fetchGeneration;
+
             string provider = ChillEnvPlugin.Cfg_WeatherProvider.Value;
-            
+
             if (provider.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase))
-            {
-                yield return FetchOpenWeather(apiKey, location, onComplete);
-            }
+                yield return FetchOpenWeather(apiKey, normalizedLocation, myGeneration, onComplete);
             else
-            {
-                yield return FetchSeniverseWeather(apiKey, location, onComplete);
-            }
+                yield return FetchSeniverseWeather(apiKey, normalizedLocation, myGeneration, onComplete);
         }
 
-        private static IEnumerator FetchSeniverseWeather(string apiKey, string location, Action<WeatherInfo> onComplete)
+        private static IEnumerator FetchSeniverseWeather(string apiKey, string location, int generation, Action<WeatherInfo> onComplete)
         {
             string finalKey = apiKey;
             if (string.IsNullOrEmpty(finalKey) && HasDefaultKey)
-            {
                 finalKey = KeySecurity.Decrypt(_encryptedDefaultKey);
-            }
 
             if (string.IsNullOrEmpty(finalKey))
             {
@@ -96,15 +97,29 @@ namespace ChillWithYou.EnvSync.Services
                 yield break;
             }
 
-            string url = $"https://api.seniverse.com/v3/weather/now.json?key={finalKey}&location={UnityWebRequest.EscapeURL(location)}&language=zh-Hans&unit=c";
+            string url = $"https://api.seniverse.com/v3/weather/now.json"
+                       + $"?key={finalKey}&location="
+                       + $"{UnityEngine.Networking.UnityWebRequest.EscapeURL(location)}"
+                       + $"&language=zh-Hans&unit=c";
+
             ChillEnvPlugin.Log?.LogInfo($"[API] Seniverse request: {location}");
 
-            using (UnityWebRequest request = UnityWebRequest.Get(url))
+            using (UnityEngine.Networking.UnityWebRequest request =
+                   UnityEngine.Networking.UnityWebRequest.Get(url))
             {
                 request.timeout = 10;
                 yield return request.SendWebRequest();
 
-                if (request.result != UnityWebRequest.Result.Success || string.IsNullOrEmpty(request.downloadHandler.text))
+                if (generation != _fetchGeneration)
+                {
+                    ChillEnvPlugin.Log?.LogInfo(
+                        $"[API] Seniverse fetch gen {generation} superseded, discarding.");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
+
+                if (request.result != UnityEngine.Networking.UnityWebRequest.Result.Success
+                    || string.IsNullOrEmpty(request.downloadHandler.text))
                 {
                     ChillEnvPlugin.Log?.LogWarning($"[API] Request failed: {request.error}");
                     onComplete?.Invoke(null);
@@ -120,10 +135,11 @@ namespace ChillWithYou.EnvSync.Services
                         _lastFetchTime = DateTime.Now;
                         _lastLocation = NormalizeLocation(location);
                         ChillEnvPlugin.Log?.LogInfo($"[API] Data updated: {weather}");
+                        onComplete?.Invoke(weather);
                     }
                     else
                     {
-                        ChillEnvPlugin.Log?.LogWarning($"[API] Parse failed");
+                        ChillEnvPlugin.Log?.LogWarning("[API] Parse failed");
                         onComplete?.Invoke(null);
                     }
                 }
@@ -131,7 +147,7 @@ namespace ChillWithYou.EnvSync.Services
             }
         }
 
-        private static IEnumerator FetchOpenWeather(string apiKey, string location, Action<WeatherInfo> onComplete)
+        private static IEnumerator FetchOpenWeather(string apiKey, string location, int generation, Action<WeatherInfo> onComplete)
         {
             if (string.IsNullOrEmpty(apiKey))
             {
@@ -142,7 +158,6 @@ namespace ChillWithYou.EnvSync.Services
 
             string finalLocation = location.Trim();
 
-            // Check if location is a city name (no comma) rather than coordinates
             if (!finalLocation.Contains(","))
             {
                 bool geocodingComplete = false;
@@ -154,13 +169,19 @@ namespace ChillWithYou.EnvSync.Services
                     resolvedCoords = coords;
                 });
 
-                // Wait for the coroutine to finish
-                while (!geocodingComplete)
-                    yield return null;
+                // ← Abort if a newer fetch was started while we were geocoding
+                if (generation != _fetchGeneration)
+                {
+                    ChillEnvPlugin.Log?.LogInfo(
+                        $"[API] Fetch gen {generation} superseded by {_fetchGeneration}, aborting.");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
 
                 if (string.IsNullOrEmpty(resolvedCoords))
                 {
-                    ChillEnvPlugin.Log?.LogError($"[API] Failed to resolve city name to coordinates: {finalLocation}");
+                    ChillEnvPlugin.Log?.LogError(
+                        $"[API] Failed to resolve city: {finalLocation}");
                     onComplete?.Invoke(null);
                     yield break;
                 }
@@ -168,7 +189,6 @@ namespace ChillWithYou.EnvSync.Services
                 finalLocation = resolvedCoords;
             }
 
-            // Parse coordinates (remove any whitespace)
             string[] parts = finalLocation.Replace(" ", "").Split(',');
             if (parts.Length != 2)
             {
@@ -179,26 +199,37 @@ namespace ChillWithYou.EnvSync.Services
 
             string lat = parts[0].Trim();
             string lon = parts[1].Trim();
-            string url = $"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={apiKey}&units=metric";
-            
+            string url = $"https://api.openweathermap.org/data/2.5/weather"
+                       + $"?lat={lat}&lon={lon}&appid={apiKey}&units=metric";
+
             ChillEnvPlugin.Log?.LogInfo($"[API] OpenWeather request: lat={lat}, lon={lon}");
 
-            using (UnityWebRequest request = UnityWebRequest.Get(url))
+            using (UnityEngine.Networking.UnityWebRequest request =
+                   UnityEngine.Networking.UnityWebRequest.Get(url))
             {
                 request.timeout = 10;
                 yield return request.SendWebRequest();
 
-                if (request.result != UnityWebRequest.Result.Success || string.IsNullOrEmpty(request.downloadHandler.text))
+                // ← Abort if superseded
+                if (generation != _fetchGeneration)
                 {
-                    ChillEnvPlugin.Log?.LogError($"[API] OpenWeather request failed: {request.error}");
-                    ChillEnvPlugin.Log?.LogError($"[API] Response: {request.downloadHandler?.text}");
+                    ChillEnvPlugin.Log?.LogInfo(
+                        $"[API] Fetch gen {generation} superseded, discarding result.");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
+
+                if (request.result != UnityEngine.Networking.UnityWebRequest.Result.Success
+                    || string.IsNullOrEmpty(request.downloadHandler.text))
+                {
+                    ChillEnvPlugin.Log?.LogError(
+                        $"[API] OpenWeather request failed: {request.error}");
                     onComplete?.Invoke(null);
                     yield break;
                 }
 
                 try
                 {
-                    ChillEnvPlugin.Log?.LogDebug($"[API] Raw response: {request.downloadHandler.text}");
                     var weather = ParseOpenWeatherJson(request.downloadHandler.text);
                     if (weather != null)
                     {
@@ -206,17 +237,17 @@ namespace ChillWithYou.EnvSync.Services
                         _lastFetchTime = DateTime.Now;
                         _lastLocation = NormalizeLocation(location);
                         ChillEnvPlugin.Log?.LogInfo($"[API] OpenWeather data updated: {weather}");
+                        onComplete?.Invoke(weather);
                     }
                     else
                     {
-                        ChillEnvPlugin.Log?.LogWarning($"[API] OpenWeather parse returned null");
+                        ChillEnvPlugin.Log?.LogWarning("[API] OpenWeather parse returned null");
                         onComplete?.Invoke(null);
                     }
                 }
                 catch (Exception ex)
                 {
                     ChillEnvPlugin.Log?.LogError($"[API] OpenWeather parse error: {ex.Message}");
-                    ChillEnvPlugin.Log?.LogError($"[API] Stack trace: {ex.StackTrace}");
                     onComplete?.Invoke(null);
                 }
             }
