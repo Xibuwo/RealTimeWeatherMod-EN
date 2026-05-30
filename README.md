@@ -251,7 +251,9 @@ The plugin automatically switches base environments based on your configured (or
 - Up to date with original repository
 - Fixed a bug where inputting the location causes the game to freeze and subconsequently crash
 
-(..) <- Too lazy to add in-between changelogs
+
+
+(...) <- Too lazy to add in-between changelogs so they've all been cramped into v5.4.6
 
 ### v5.4.2
 - Added "Unlock Purchasable Items" system (unlocks items requiring currency)
