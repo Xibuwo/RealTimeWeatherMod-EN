@@ -15,6 +15,7 @@ namespace ChillWithYou.EnvSync.Core
         private EnvironmentType? _lastAppliedEnv;
         private bool _isFetching;
         private bool _pendingForceRefresh;
+        private bool _pendingForceRefreshIsUserTriggered;
 
         private bool _firstSyncDone;
         private bool _initialEnvApplied;
@@ -88,11 +89,13 @@ namespace ChillWithYou.EnvSync.Core
 
         private void ScheduleNextWeatherCheckFromCache(string location)
         {
+            float configuredInterval = GetConfiguredWeatherRefreshSeconds();
             float remainingSeconds;
             if (WeatherService.TryGetCacheRemainingSeconds(location, out remainingSeconds))
             {
-                // Wake up just after the cache expires; at least 5 s in the future
-                _nextWeatherCheckTime = Time.time + Mathf.Max(5f, remainingSeconds + 1f);
+                // Never wait longer than the user's configured refresh interval
+                float delay = Mathf.Min(configuredInterval, Mathf.Max(5f, remainingSeconds + 1f));
+                _nextWeatherCheckTime = Time.time + delay;
                 return;
             }
             ScheduleDefaultWeatherCheck();
@@ -292,7 +295,8 @@ namespace ChillWithYou.EnvSync.Core
             }
 
             if (Time.time >= _nextWeatherCheckTime)
-                TriggerSync(true, false);
+                ScheduleDefaultWeatherCheck();
+                TriggerSync(false, false);
         }
 
         // ─────────────────────────────────────────────────────────────
@@ -372,13 +376,14 @@ namespace ChillWithYou.EnvSync.Core
         {
             if (_isFetching)
             {
-                // Don't stack more than one pending refresh
                 _pendingForceRefresh = true;
+                _pendingForceRefreshIsUserTriggered = true;
                 ChillEnvPlugin.Log?.LogInfo(
                     "ForceRefresh queued — fetch already in progress");
                 return;
             }
-            _pendingForceRefresh = false;   // clear any stale flag before starting
+            _pendingForceRefresh = false;
+            _pendingForceRefreshIsUserTriggered = false;
             ScheduleDefaultWeatherCheck();
             TriggerSync(true, false);
         }
@@ -458,7 +463,9 @@ namespace ChillWithYou.EnvSync.Core
 
                     if (_isFetching)
                     {
-                        if (forceApi) _pendingForceRefresh = true;
+                        if (forceApi && _pendingForceRefreshIsUserTriggered) _pendingForceRefresh = true;
+                        if (forceApi)
+                            ChillEnvPlugin.Log?.LogWarning("TriggerSync: fetch already in progress");
                         ScheduleDefaultWeatherCheck();
                         return;
                     }
@@ -495,8 +502,10 @@ namespace ChillWithYou.EnvSync.Core
             {
                 if (_isFetching)
                 {
-                    if (forceApi) _pendingForceRefresh = true;
-                    ChillEnvPlugin.Log?.LogWarning("TriggerSync: fetch already in progress");
+                    if (forceApi && _pendingForceRefreshIsUserTriggered)
+                        _pendingForceRefresh = true;
+                    if (forceApi)
+                        ChillEnvPlugin.Log?.LogWarning("TriggerSync: fetch already in progress");
                     ScheduleDefaultWeatherCheck();
                     return;
                 }
