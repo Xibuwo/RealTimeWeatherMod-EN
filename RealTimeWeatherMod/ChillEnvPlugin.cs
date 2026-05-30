@@ -9,12 +9,12 @@ using Bulbul;
 
 namespace ChillWithYou.EnvSync
 {
-    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "5.4.3")]
+    [BepInPlugin("chillwithyou.envsync", "Chill Env Sync", "5.4.5")]
     public class ChillEnvPlugin : BaseUnityPlugin
     {
         internal static ChillEnvPlugin Instance;
         internal static ManualLogSource Log;
-        public const string PluginVersion = "5.4.3";
+        public const string PluginVersion = "5.4.5";
         internal static UnlockItemService UnlockItemServiceInstance;
 
         internal static object WindowViewServiceInstance;
@@ -29,6 +29,7 @@ namespace ChillWithYou.EnvSync
         internal static ConfigEntry<string> Cfg_ApiKey;
         internal static ConfigEntry<string> Cfg_Location;
         internal static ConfigEntry<bool> Cfg_EnableWeatherSync;
+        internal static ConfigEntry<bool> Cfg_EnableTimeSync;
         internal static ConfigEntry<bool> Cfg_UnlockEnvironments;
         internal static ConfigEntry<bool> Cfg_UnlockDecorations;
         internal static ConfigEntry<bool> Cfg_UnlockPurchasableItems;
@@ -58,7 +59,7 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo("【5.4.3】Starting - Weather, Sunrise & Sunset Edition (OpenWeather Support)");
+            Log.LogInfo("【5.4.5】Starting - Weather, Sunrise & Sunset Edition (OpenWeather Support)");
 
             try
             {
@@ -91,12 +92,13 @@ namespace ChillWithYou.EnvSync
 
         private void InitConfig()
         {
-            Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 20, "Weather API refresh interval (minutes)");
+            Cfg_WeatherRefreshMinutes = Config.Bind("WeatherSync", "RefreshMinutes", 15, "Weather API refresh interval (minutes)");
             Cfg_SunriseTime = Config.Bind("TimeConfig", "Sunrise", "06:30", "Sunrise time");
             Cfg_SunsetTime = Config.Bind("TimeConfig", "Sunset", "18:30", "Sunset time");
             Cfg_GeneralAPI = Config.Bind("WeatherAPI", "GeneralAPI", "fb54bc28f5545a10b8e5421869cf3bc5", "General API Key, put your API Key here (The GeneralAPI Key is the same as APIKey, which means, you have to put your API on both)");
 
             Cfg_EnableWeatherSync = Config.Bind("WeatherAPI", "EnableWeatherSync", true, "Enable weather API sync");
+            Cfg_EnableTimeSync = Config.Bind("TimeSync", "EnableTimeSync", true, "Enable time-based day/night cycling (works without an API key)");
             Cfg_WeatherProvider = Config.Bind("WeatherAPI", "WeatherProvider", "OpenWeather", "Weather provider: Seniverse or OpenWeather");
             Cfg_ApiKey = Config.Bind("WeatherAPI", "ApiKey", "fb54bc28f5545a10b8e5421869cf3bc5", "API Key (Same as GeneralAPI, Seniverse or OpenWeather)");
             Cfg_Location = Config.Bind("WeatherAPI", "Location", "Madrid", "Location (city name for Seniverse and for OpenWeather as well. You can use lon,lat for OpenWeather)");
@@ -368,6 +370,44 @@ namespace ChillWithYou.EnvSync
             catch (Exception ex)
             {
                 Log?.LogError($"❌ Universal Unlock v2 failed: {ex}");
+            }
+        }
+        internal static bool IsInCutscene()
+        {
+            try
+            {
+                RoomGameManager roomGM = UnityEngine.GameObject.FindObjectOfType<RoomGameManager>();
+                if (roomGM == null)
+                {
+                    var all = UnityEngine.Resources.FindObjectsOfTypeAll<RoomGameManager>();
+                    if (all == null || all.Length == 0) return false;
+                    roomGM = all[0];
+                }
+
+                if (roomGM == null) return false;
+
+                var prop = typeof(RoomGameManager).GetProperty(
+                    "CurrentMainState",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (prop == null) return false;
+
+                object stateObj = prop.GetValue(roomGM, null);
+                if (stateObj == null) return false;
+
+                int state;
+                if (stateObj is int)
+                    state = (int)stateObj;
+                else if (stateObj.GetType().IsEnum)
+                    state = Convert.ToInt32(stateObj);
+                else if (!int.TryParse(stateObj.ToString(), out state))
+                    return false;
+
+                // 14 = normal gameplay state; anything else = cutscene / loading / menu
+                return state != 14;
+            }
+            catch
+            {
+                return false;
             }
         }
     }
