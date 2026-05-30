@@ -247,7 +247,7 @@ The plugin automatically switches base environments based on your configured (or
 
 ### v5.4.6
 - Fixed plugin not working after an update
-- Fixed both standalone's and iGPUSavior integrated versions' UI being broken
+- Fixed both standalone's and iGPUSavior integrated versions' UI being broken (Have yet to fix UI offsets)
 - Up to date with original repository
 - Fixed a bug where inputting the location causes the game to freeze and subconsequently crash
 
