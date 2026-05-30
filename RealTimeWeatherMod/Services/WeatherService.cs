@@ -11,10 +11,55 @@ namespace ChillWithYou.EnvSync.Services
     {
         private static WeatherInfo _cachedWeather;
         private static DateTime _lastFetchTime;
+        private static string _lastLocation;
         private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(60);
         public static WeatherInfo CachedWeather => _cachedWeather;
         private static readonly string _encryptedDefaultKey = "7Mr4YSR87bFvE4zDgj6NbuBKgz4EiPYEnRTQ0RIaeSU=";
         public static bool HasDefaultKey => !string.IsNullOrEmpty(_encryptedDefaultKey);
+
+        private static string NormalizeLocation(string location)
+        {
+            return location?.Trim() ?? string.Empty;
+        }
+
+        private static bool HasValidCacheNormalized(string normalizedLocation)
+        {
+            return _cachedWeather != null
+                && DateTime.Now - _lastFetchTime < CacheExpiry
+                && string.Equals(_lastLocation, normalizedLocation,
+                                 StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Returns true if there is a valid cached result for this location.</summary>
+        public static bool HasValidCache(string location)
+        {
+            return HasValidCacheNormalized(NormalizeLocation(location));
+        }
+
+        /// <summary>
+        /// Returns true and fills <paramref name="seconds"/> with how many seconds
+        /// remain before the cache expires for this location.
+        /// </summary>
+        public static bool TryGetCacheRemainingSeconds(string location, out float seconds)
+        {
+            seconds = 0f;
+            string norm = NormalizeLocation(location);
+            if (!HasValidCacheNormalized(norm)) return false;
+
+            TimeSpan elapsed = DateTime.Now - _lastFetchTime;
+            TimeSpan remaining = CacheExpiry - elapsed;
+            if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
+            seconds = (float)remaining.TotalSeconds;
+            return true;
+        }
+
+        /// <summary>Clears the weather cache (e.g. when the city is changed).</summary>
+        public static void InvalidateCache()
+        {
+            _cachedWeather = null;
+            _lastLocation = null;
+            _lastFetchTime = DateTime.MinValue;
+        }
 
         public static IEnumerator FetchWeather(string apiKey, string location, bool force, Action<WeatherInfo> onComplete)
         {
@@ -73,8 +118,8 @@ namespace ChillWithYou.EnvSync.Services
                     {
                         _cachedWeather = weather;
                         _lastFetchTime = DateTime.Now;
+                        _lastLocation = NormalizeLocation(location);
                         ChillEnvPlugin.Log?.LogInfo($"[API] Data updated: {weather}");
-                        onComplete?.Invoke(weather);
                     }
                     else
                     {
@@ -159,8 +204,8 @@ namespace ChillWithYou.EnvSync.Services
                     {
                         _cachedWeather = weather;
                         _lastFetchTime = DateTime.Now;
+                        _lastLocation = NormalizeLocation(location);
                         ChillEnvPlugin.Log?.LogInfo($"[API] OpenWeather data updated: {weather}");
-                        onComplete?.Invoke(weather);
                     }
                     else
                     {
