@@ -12,8 +12,7 @@ namespace ChillWithYou.EnvSync.Services
         private static WeatherInfo _cachedWeather;
         private static DateTime _lastFetchTime;
         private static string _lastLocation;
-        private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(60);
-        public static WeatherInfo CachedWeather => _cachedWeather;
+        private static TimeSpan CacheExpiry => TimeSpan.FromMinutes(Mathf.Max(1, ChillEnvPlugin.Cfg_WeatherRefreshMinutes.Value)); public static WeatherInfo CachedWeather => _cachedWeather;
         private static readonly string _encryptedDefaultKey = "7Mr4YSR87bFvE4zDgj6NbuBKgz4EiPYEnRTQ0RIaeSU=";
         public static bool HasDefaultKey => !string.IsNullOrEmpty(_encryptedDefaultKey);
         private static int _fetchGeneration = 0;   // incremented to cancel in-flight fetches
