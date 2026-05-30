@@ -372,22 +372,32 @@ namespace ChillWithYou.EnvSync.Core
         {
             if (_isFetching)
             {
+                // Don't stack more than one pending refresh
                 _pendingForceRefresh = true;
                 ChillEnvPlugin.Log?.LogInfo(
                     "ForceRefresh queued — fetch already in progress");
                 return;
             }
+            _pendingForceRefresh = false;   // clear any stale flag before starting
             ScheduleDefaultWeatherCheck();
             TriggerSync(true, false);
         }
 
         private void HandlePendingForceRefresh()
         {
-            if (_pendingForceRefresh)
-            {
-                _pendingForceRefresh = false;
-                ForceRefreshWeather();
-            }
+            if (!_pendingForceRefresh) return;
+            _pendingForceRefresh = false;
+
+            // Defer to next frame so the current callback stack fully unwinds first.
+            // This prevents re-entering FetchWeather while _isFetching is still
+            // being torn down by the caller.
+            StartCoroutine(DeferredForceRefresh());
+        }
+
+        private System.Collections.IEnumerator DeferredForceRefresh()
+        {
+            yield return null;          // wait one frame
+            ForceRefreshWeather();
         }
 
         // ─────────────────────────────────────────────────────────────
