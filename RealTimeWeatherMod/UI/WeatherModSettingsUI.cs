@@ -127,38 +127,12 @@ namespace ChillWithYou.EnvSync.UI
             try
             {
                 ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Force refresh triggered");
-                ChillEnvPlugin.Instance.Config.Reload();
-
-                // Find the runner in the Chill Env Sync's GameObject
-                var runnerObject = GameObject.Find("ChillEnvSyncRunner");
-                if (runnerObject == null)
-                {
-                    ChillEnvPlugin.Log?.LogError("[Weather MOD] ChillEnvSyncRunner GameObject not found");
-                    return;
-                }
-
-                var runner = runnerObject.GetComponent<Core.AutoEnvRunner>();
-                if (runner != null)
-                {
-                    // Use reflection to call the private ForceRefreshWeather method
-                    var refreshMethod = runner.GetType().GetMethod("ForceRefreshWeather",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (refreshMethod != null)
-                    {
-                        refreshMethod.Invoke(runner, null);
-                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Weather data force refreshed (API call initiated)");
-                    }
-                    else
-                    {
-                        ChillEnvPlugin.Log?.LogError("[Weather MOD] ForceRefreshWeather method not found");
-                    }
-                }
-                else
-                {
-                    ChillEnvPlugin.Log?.LogError("[Weather MOD] AutoEnvRunner component not found on GameObject");
-                }
+                // Invalidate first so the generation counter advances,
+                // cancelling any geocoding that's still in-flight for the old city
+                Services.WeatherService.InvalidateCache();
+                Core.AutoEnvRunner.TriggerWeatherRefresh();
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 ChillEnvPlugin.Log?.LogError($"[Weather MOD] Force refresh failed: {ex.Message}");
             }
