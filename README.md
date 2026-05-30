@@ -245,6 +245,14 @@ The plugin automatically switches base environments based on your configured (or
 
 ## 📝 Version History
 
+### v5.4.6
+- Fixed plugin not working after an update
+- Fixed both standalone's and iGPUSavior integrated versions' UI being broken
+- Up to date with original repository
+- Fixed a bug where inputting the location causes the game to freeze and subconsequently crash
+
+(..) <- Too lazy to add in-between changelogs
+
 ### v5.4.2
 - Added "Unlock Purchasable Items" system (unlocks items requiring currency)
 - Added configuration toggle for Purchasable Items (requires restart, as always)
