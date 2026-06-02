@@ -12,6 +12,9 @@ namespace ChillWithYou.EnvSync.Core
     {
         private float _nextWeatherCheckTime;
         private float _nextTimeCheckTime;
+        private float _lastEnvApplyTime;
+        private const float EnvApplyCooldown = 2.0f;
+        private EnvironmentType? _pendingEnvTarget;
         private EnvironmentType? _lastAppliedEnv;
         private bool _isFetching;
         private bool _pendingForceRefresh;
@@ -295,8 +298,10 @@ namespace ChillWithYou.EnvSync.Core
             }
 
             if (Time.time >= _nextWeatherCheckTime)
+            {
                 ScheduleDefaultWeatherCheck();
                 TriggerSync(false, false);
+            }
         }
 
         // ─────────────────────────────────────────────────────────────
@@ -551,50 +556,67 @@ namespace ChillWithYou.EnvSync.Core
             if (SceneryAutomationSystem.IsWhaleSystemTriggered)
             {
                 ChillEnvPlugin.Log?.LogInfo(
-                    "[Whale Easter Egg] 🐋 System-triggered whale active, skipping weather change.");
+                    "[Whale Easter Egg] 🐋 Whale active, skipping weather change.");
                 return;
             }
 
             EnvironmentType timeBase = GetTimeBasedEnvironment();
 
-            if (policy.CanControlTime)
-            {
-                ApplyBaseEnvironment(timeBase, force);
-                _lastAppliedEnv = timeBase;
-            }
+            // Determine the single final base environment BEFORE applying anything
+            EnvironmentType finalBase = timeBase;
 
-            if (!policy.CanControlWeather || weather == null) return;
-
-            EnvironmentType baseEnv = policy.CanControlTime
-                ? timeBase
-                : (GetCurrentBaseEnvironment() ?? GetTimeBasedEnvironment());
-
-            EnvironmentType finalEnv = baseEnv;
-            if (policy.CanApplyCloudyOverride
+            if (policy.CanControlWeather && weather != null
+                && policy.CanApplyCloudyOverride
                 && IsBadWeather(weather.Code)
-                && baseEnv != EnvironmentType.Night)
+                && timeBase != EnvironmentType.Night)
             {
-                finalEnv = EnvironmentType.Cloudy;
-                ApplyBaseEnvironment(finalEnv, force);
+                finalBase = EnvironmentType.Cloudy;
             }
 
-            ApplyScenery(GetSceneryType(weather.Code), force);
-            _lastAppliedEnv = finalEnv;
+            // Apply exactly once
+            if (policy.CanControlTime || policy.CanControlWeather)
+            {
+                ApplyBaseEnvironment(finalBase, force);
+                _lastAppliedEnv = finalBase;
+            }
+
+            // Handle precipitation scenery separately (these are overlays, not base envs)
+            if (policy.CanControlWeather && weather != null)
+            {
+                ApplyScenery(GetSceneryType(weather.Code), force);
+            }
         }
 
         private void ApplyBaseEnvironment(EnvironmentType target, bool force)
         {
             if (!force && IsEnvironmentActive(target)) return;
+            if (!force && Time.time - _lastEnvApplyTime < EnvApplyCooldown) return;
 
-            foreach (var env in BaseEnvironments)
-                if (env != target && IsEnvironmentActive(env))
-                    SimulateClick(env);
+            _lastEnvApplyTime = Time.time;
+            _pendingEnvTarget = target;
 
-            if (!IsEnvironmentActive(target))
-                SimulateClick(target);
-
+            // Use ONLY the service call — do not SimulateClick base environments
             ChillEnvPlugin.CallServiceChangeWeather(target);
             ChillEnvPlugin.Log?.LogInfo($"[Environment] Switching to: {target}");
+
+            // Verify after a short delay and correct if the game overrode us
+            StartCoroutine(VerifyAndCorrectEnvironment(target, Time.time));
+        }
+
+        private System.Collections.IEnumerator VerifyAndCorrectEnvironment(
+            EnvironmentType target, float applyTime)
+        {
+            yield return new WaitForSeconds(0.5f);
+
+            // If another apply happened since this coroutine started, abort
+            if (_lastEnvApplyTime != applyTime) yield break;
+
+            if (!IsEnvironmentActive(target))
+            {
+                ChillEnvPlugin.Log?.LogWarning(
+                    $"[Environment] Game overrode {target}, re-applying...");
+                ChillEnvPlugin.CallServiceChangeWeather(target);
+            }
         }
 
         private void ApplyScenery(EnvironmentType? target, bool force)
