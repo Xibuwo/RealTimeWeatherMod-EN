@@ -1324,18 +1324,26 @@ namespace ChillWithYou.EnvSync.UI
                     hlg.padding.right = 0;
                 }
             }
-            var rectTransform = tabBarParent.GetComponent<RectTransform>();
-            if (rectTransform != null)
-            {
-                var currentPos = rectTransform.anchoredPosition;
-                rectTransform.anchoredPosition = new Vector2(currentPos.x - 90f, currentPos.y);
-            }
         }
 
         private static void HookIntoTabButtons(SettingUI settingUI)
         {
-            var buttons = new[] { "_generalInteractableUI", "_graphicInteractableUI", "_audioInteractableUI", "_creditsInteractableUI" };
-            var parents = new[] { "_generalParent", "_graphicParent", "_audioParent", "_creditsParent" };
+            var buttons = new[] {
+        "_generalInteractableUI",
+        "_graphicInteractableUI",
+        "_audioInteractableUI",
+        "_accountInteractableUI",   
+        "_newsInteractableUI",       
+        "_creditsInteractableUI"
+    };
+            var parents = new[] {
+        "_generalParent",
+        "_graphicParent",
+        "_audioParent",
+        "_accountParent",          
+        "_newsParent",              
+        "_creditsParent"
+    };
             for (int i = 0; i < buttons.Length; i++)
             {
                 var btn = AccessTools.Field(typeof(SettingUI), buttons[i]).GetValue(settingUI) as InteractableUI;
@@ -1356,11 +1364,17 @@ namespace ChillWithYou.EnvSync.UI
 
         private static void SwitchToModTab(SettingUI settingUI)
         {
-            var parents = new[] { "_generalParent", "_graphicParent", "_audioParent", "_creditsParent" };
+            var parents = new[] {
+        "_generalParent", "_graphicParent", "_audioParent",
+        "_accountParent", "_newsParent", "_creditsParent" 
+    };
             foreach (var p in parents)
                 (AccessTools.Field(typeof(SettingUI), p).GetValue(settingUI) as GameObject)?.SetActive(false);
 
-            var buttons = new[] { "_generalInteractableUI", "_graphicInteractableUI", "_audioInteractableUI", "_creditsInteractableUI" };
+            var buttons = new[] {
+        "_generalInteractableUI", "_graphicInteractableUI", "_audioInteractableUI",
+        "_accountInteractableUI", "_newsInteractableUI", "_creditsInteractableUI" 
+    };
             foreach (var b in buttons)
                 (AccessTools.Field(typeof(SettingUI), b).GetValue(settingUI) as InteractableUI)?.DeactivateUseUI(false);
 
@@ -1654,7 +1668,7 @@ namespace ChillWithYou.EnvSync.UI
                 generalButton?.ActivateUseUI(false);
                 generalParent?.SetActive(true);
 
-                var others = new[] { "_graphicParent", "_audioParent", "_creditsParent" };
+                var others = new[] { "_graphicParent", "_audioParent", "_accountParent", "_newsParent", "_creditsParent" };
                 foreach (var o in others)
                     (AccessTools.Field(typeof(SettingUI), o).GetValue(__instance) as GameObject)?.SetActive(false);
             }
