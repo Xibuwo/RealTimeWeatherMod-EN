@@ -79,6 +79,8 @@ namespace ChillWithYou.EnvSync.Services
 
             if (provider.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase))
                 yield return FetchOpenWeather(apiKey, normalizedLocation, myGeneration, onComplete);
+            else if (provider.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase))
+                yield return FetchOpenMeteoWeather(normalizedLocation, myGeneration, onComplete);
             else
                 yield return FetchSeniverseWeather(apiKey, normalizedLocation, myGeneration, onComplete);
         }
@@ -251,7 +253,294 @@ namespace ChillWithYou.EnvSync.Services
                 }
             }
         }
+        // ── Open-Meteo geocoding ──────────────────────────────────────────
+        private static IEnumerator FetchOpenMeteoCoordinates(string cityName, Action<string> onComplete)
+        {
+            string url = $"https://geocoding-api.open-meteo.com/v1/search?name={UnityWebRequest.EscapeURL(cityName)}&count=1&language=en&format=json";
+            ChillEnvPlugin.Log?.LogInfo($"[OpenMeteo Geocoding] Resolving city: {cityName}");
 
+            using (UnityWebRequest req = UnityWebRequest.Get(url))
+            {
+                req.timeout = 10;
+                yield return req.SendWebRequest();
+
+                if (req.result != UnityWebRequest.Result.Success || string.IsNullOrEmpty(req.downloadHandler.text))
+                {
+                    ChillEnvPlugin.Log?.LogWarning($"[OpenMeteo Geocoding] Request failed: {req.error}");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
+
+                try
+                {
+                    string json = req.downloadHandler.text;
+                    // Response: {"results":[{"latitude":40.71,"longitude":-74.01,...}]}
+                    if (json.Contains("\"results\":[]") || !json.Contains("\"latitude\""))
+                    {
+                        ChillEnvPlugin.Log?.LogWarning($"[OpenMeteo Geocoding] No results for '{cityName}'");
+                        onComplete?.Invoke(null);
+                        yield break;
+                    }
+
+                    string latStr = ExtractStringValue(json, "\"latitude\":", ",");
+                    string lonStr = ExtractStringValue(json, "\"longitude\":", ",");
+
+                    if (string.IsNullOrEmpty(latStr) || string.IsNullOrEmpty(lonStr))
+                    {
+                        ChillEnvPlugin.Log?.LogWarning("[OpenMeteo Geocoding] Could not parse lat/lon");
+                        onComplete?.Invoke(null);
+                        yield break;
+                    }
+
+                    string coords = $"{latStr.Trim()},{lonStr.Trim()}";
+                    ChillEnvPlugin.Log?.LogInfo($"[OpenMeteo Geocoding] Resolved '{cityName}' to {coords}");
+                    onComplete?.Invoke(coords);
+                }
+                catch (Exception ex)
+                {
+                    ChillEnvPlugin.Log?.LogError($"[OpenMeteo Geocoding] Parse error: {ex.Message}");
+                    onComplete?.Invoke(null);
+                }
+            }
+        }
+
+        // ── Open-Meteo weather fetch ──────────────────────────────────────
+        private static IEnumerator FetchOpenMeteoWeather(string location, int generation, Action<WeatherInfo> onComplete)
+        {
+            string finalLocation = location.Trim();
+
+            // Geocode city names
+            if (!finalLocation.Contains(","))
+            {
+                string resolvedCoords = null;
+                yield return FetchOpenMeteoCoordinates(finalLocation, (coords) => { resolvedCoords = coords; });
+
+                if (generation != _fetchGeneration) { onComplete?.Invoke(null); yield break; }
+                if (string.IsNullOrEmpty(resolvedCoords))
+                {
+                    ChillEnvPlugin.Log?.LogError($"[OpenMeteo] Could not resolve city: {finalLocation}");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
+                finalLocation = resolvedCoords;
+            }
+
+            string[] parts = finalLocation.Replace(" ", "").Split(',');
+            if (parts.Length != 2) { onComplete?.Invoke(null); yield break; }
+
+            string lat = parts[0].Trim();
+            string lon = parts[1].Trim();
+
+            // current_weather gives: temperature, weathercode, is_day
+            string url = $"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true&temperature_unit=celsius";
+
+            ChillEnvPlugin.Log?.LogInfo($"[OpenMeteo] Fetching weather: lat={lat} lon={lon}");
+
+            using (UnityWebRequest req = UnityWebRequest.Get(url))
+            {
+                req.timeout = 10;
+                yield return req.SendWebRequest();
+
+                if (generation != _fetchGeneration) { onComplete?.Invoke(null); yield break; }
+
+                if (req.result != UnityWebRequest.Result.Success || string.IsNullOrEmpty(req.downloadHandler.text))
+                {
+                    ChillEnvPlugin.Log?.LogError($"[OpenMeteo] Request failed: {req.error}");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
+
+                try
+                {
+                    string json = req.downloadHandler.text;
+                    // {"current_weather":{"temperature":18.5,"windspeed":12.1,"weathercode":3,"is_day":1,...}}
+                    int cwIndex = json.IndexOf("\"current_weather\"");
+                    if (cwIndex < 0) { onComplete?.Invoke(null); yield break; }
+                    string cwSection = json.Substring(cwIndex);
+
+                    string tempStr = ExtractStringValue(cwSection, "\"temperature\":", ",");
+                    string wmoStr = ExtractStringValue(cwSection, "\"weathercode\":", ",");
+
+                    float tempFloat = 0;
+                    float.TryParse(tempStr, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out tempFloat);
+
+                    int wmoCode = 0;
+                    // Try with comma first, fall back without (last field in object)
+                    if (string.IsNullOrEmpty(wmoStr))
+                        wmoStr = ExtractStringValue(cwSection, "\"weathercode\":", "}");
+                    int.TryParse(wmoStr?.Trim(), out wmoCode);
+
+                    int internalCode = MapWmoCodeToInternalCode(wmoCode);
+                    string description = WmoCodeToDescription(wmoCode);
+
+                    ChillEnvPlugin.Log?.LogDebug($"[OpenMeteo] wmo={wmoCode} temp={tempFloat} -> internal={internalCode}");
+
+                    var weather = new WeatherInfo
+                    {
+                        Code = internalCode,
+                        Text = description,
+                        Temperature = (int)Math.Round(tempFloat),
+                        Condition = MapSeniverseCodeToCondition(internalCode),
+                        UpdateTime = DateTime.Now
+                    };
+
+                    _cachedWeather = weather;
+                    _lastFetchTime = DateTime.Now;
+                    _lastLocation = NormalizeLocation(location);
+                    ChillEnvPlugin.Log?.LogInfo($"[OpenMeteo] Data updated: {weather}");
+                    onComplete?.Invoke(weather);
+                }
+                catch (Exception ex)
+                {
+                    ChillEnvPlugin.Log?.LogError($"[OpenMeteo] Parse error: {ex.Message}");
+                    onComplete?.Invoke(null);
+                }
+            }
+        }
+
+        // ── Open-Meteo sun schedule ───────────────────────────────────────
+        private static IEnumerator FetchOpenMeteoSunSchedule(string location, Action<SunData> onComplete)
+        {
+            string finalLocation = location.Trim();
+
+            if (!finalLocation.Contains(","))
+            {
+                string resolvedCoords = null;
+                yield return FetchOpenMeteoCoordinates(finalLocation, (coords) => { resolvedCoords = coords; });
+                if (string.IsNullOrEmpty(resolvedCoords)) { onComplete?.Invoke(null); yield break; }
+                finalLocation = resolvedCoords;
+            }
+
+            string[] parts = finalLocation.Replace(" ", "").Split(',');
+            if (parts.Length != 2) { onComplete?.Invoke(null); yield break; }
+
+            string lat = parts[0].Trim();
+            string lon = parts[1].Trim();
+            string today = DateTime.Now.ToString("yyyy-MM-dd");
+
+            // daily=sunrise,sunset returns local times as strings like "2026-06-07T06:12"
+            string url = $"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}" +
+                         $"&daily=sunrise,sunset&timezone=auto&start_date={today}&end_date={today}";
+
+            ChillEnvPlugin.Log?.LogInfo($"[OpenMeteo SunSync] Fetching sunrise/sunset for lat={lat} lon={lon}");
+
+            using (UnityWebRequest req = UnityWebRequest.Get(url))
+            {
+                req.timeout = 10;
+                yield return req.SendWebRequest();
+
+                if (req.result != UnityWebRequest.Result.Success || string.IsNullOrEmpty(req.downloadHandler.text))
+                {
+                    ChillEnvPlugin.Log?.LogError($"[OpenMeteo SunSync] Request failed: {req.error}");
+                    onComplete?.Invoke(null);
+                    yield break;
+                }
+
+                try
+                {
+                    string json = req.downloadHandler.text;
+                    // daily.sunrise: ["2026-06-07T06:12"], daily.sunset: ["2026-06-07T21:05"]
+                    string sunriseRaw = ExtractStringValue(json, "\"sunrise\":[\"", "\"");
+                    string sunsetRaw = ExtractStringValue(json, "\"sunset\":[\"", "\"");
+
+                    if (string.IsNullOrEmpty(sunriseRaw) || string.IsNullOrEmpty(sunsetRaw))
+                    {
+                        ChillEnvPlugin.Log?.LogError("[OpenMeteo SunSync] Could not parse sunrise/sunset");
+                        onComplete?.Invoke(null);
+                        yield break;
+                    }
+
+                    // Format is "2026-06-07T06:12" — take only the HH:mm part
+                    string sunriseTime = sunriseRaw.Length >= 16 ? sunriseRaw.Substring(11, 5) : sunriseRaw;
+                    string sunsetTime = sunsetRaw.Length >= 16 ? sunsetRaw.Substring(11, 5) : sunsetRaw;
+
+                    ChillEnvPlugin.Log?.LogInfo($"[OpenMeteo SunSync] sunrise={sunriseTime} sunset={sunsetTime}");
+                    onComplete?.Invoke(new SunData { sunrise = sunriseTime, sunset = sunsetTime });
+                }
+                catch (Exception ex)
+                {
+                    ChillEnvPlugin.Log?.LogError($"[OpenMeteo SunSync] Parse error: {ex.Message}");
+                    onComplete?.Invoke(null);
+                }
+            }
+        }
+
+        // ── WMO → internal code mapper ────────────────────────────────────
+        // Open-Meteo WMO codes (subset of WMO 4677 used by the API):
+        //   0        Clear sky
+        //   1,2,3    Mainly clear / partly cloudy / overcast
+        //   45,48    Fog / rime fog
+        //   51,53,55 Drizzle light/moderate/dense
+        //   56,57    Freezing drizzle light/dense
+        //   61,63,65 Rain light/moderate/heavy
+        //   66,67    Freezing rain light/heavy
+        //   71,73,75 Snow fall light/moderate/heavy
+        //   77       Snow grains
+        //   80,81,82 Rain showers slight/moderate/violent
+        //   85,86    Snow showers slight/heavy
+        //   95       Thunderstorm slight/moderate
+        //   96,99    Thunderstorm with slight/heavy hail
+        private static int MapWmoCodeToInternalCode(int wmo)
+        {
+            if (wmo == 0) return 0;   // Clear
+            if (wmo == 1 || wmo == 2) return 5;   // Partly cloudy
+            if (wmo == 3) return 9;   // Overcast
+            if (wmo == 45 || wmo == 48) return 30;  // Fog
+            if (wmo == 51 || wmo == 56) return 13;  // Light drizzle / freezing drizzle light → LightRain
+            if (wmo == 53 || wmo == 57) return 13;  // Moderate drizzle / freezing drizzle dense
+            if (wmo == 55) return 13;  // Dense drizzle
+            if (wmo == 61 || wmo == 66) return 13;  // Light rain / freezing rain light → LightRain
+            if (wmo == 63) return 14;  // Moderate rain → HeavyRain
+            if (wmo == 65 || wmo == 67) return 10;  // Heavy rain / freezing rain heavy
+            if (wmo == 71 || wmo == 77) return 22;  // Light snow / snow grains
+            if (wmo == 73) return 23;  // Moderate snow
+            if (wmo == 75) return 24;  // Heavy snow
+            if (wmo == 80) return 13;  // Rain showers slight → LightRain
+            if (wmo == 81) return 14;  // Rain showers moderate → HeavyRain
+            if (wmo == 82) return 10;  // Rain showers violent → HeavyRain (severe)
+            if (wmo == 85) return 22;  // Snow showers slight
+            if (wmo == 86) return 24;  // Snow showers heavy
+            if (wmo == 95) return 11;  // Thunderstorm
+            if (wmo == 96 || wmo == 99) return 12;  // Thunderstorm with hail (maps to ThunderRain)
+            return 0; // Unknown → treat as clear
+        }
+
+        private static string WmoCodeToDescription(int wmo)
+        {
+            switch (wmo)
+            {
+                case 0: return "Clear Sky";
+                case 1: return "Mainly Clear";
+                case 2: return "Partly Cloudy";
+                case 3: return "Overcast Clouds";
+                case 45: return "Foggy";
+                case 48: return "Rime Fog";
+                case 51: return "Light Drizzle";
+                case 53: return "Moderate Drizzle";
+                case 55: return "Dense Drizzle";
+                case 56: return "Light Freezing Drizzle";
+                case 57: return "Heavy Freezing Drizzle";
+                case 61: return "Light Rain";
+                case 63: return "Moderate Rain";
+                case 65: return "Heavy Rain";
+                case 66: return "Light Freezing Rain";
+                case 67: return "Heavy Freezing Rain";
+                case 71: return "Light Snow";
+                case 73: return "Moderate Snow";
+                case 75: return "Heavy Snow";
+                case 77: return "Snow Grains";
+                case 80: return "Light Showers";
+                case 81: return "Moderate Showers";
+                case 82: return "Heavy Showers";
+                case 85: return "Light Snow Showers";
+                case 86: return "Heavy Snow Showers";
+                case 95: return "Thunderstorm";
+                case 96: return "Thunderstorm w/ Hail";
+                case 99: return "Heavy Thunderstorm w/ Hail";
+                default: return "Unknown";
+            }
+        }
         private static WeatherInfo ParseSeniverseJson(string json)
         {
             try
@@ -390,10 +679,14 @@ namespace ChillWithYou.EnvSync.Services
         public static IEnumerator FetchSunSchedule(string apiKey, string location, Action<SunData> onComplete)
         {
             string provider = ChillEnvPlugin.Cfg_WeatherProvider.Value;
-            
+
             if (provider.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase))
             {
                 yield return FetchOpenWeatherSunSchedule(apiKey, location, onComplete);
+            }
+            else if (provider.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return FetchOpenMeteoSunSchedule(location, onComplete);
             }
             else
             {
