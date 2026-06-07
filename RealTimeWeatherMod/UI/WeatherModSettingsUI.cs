@@ -303,15 +303,18 @@ namespace ChillWithYou.EnvSync.UI
                     });
 
                     // Weather Provider
-                    var providerOptions = new List<string> { "Seniverse", "OpenWeather" };
-                    int providerIndex = ChillEnvPlugin.Cfg_WeatherProvider.Value.Equals("OpenWeather", System.StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+                    var providerOptions = new List<string> { "Seniverse", "OpenWeather", "OpenMeteo" };
+                    int providerIndex = 0;
+                    string provVal = ChillEnvPlugin.Cfg_WeatherProvider.Value;
+                    if (provVal.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase)) providerIndex = 1;
+                    else if (provVal.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase)) providerIndex = 2;
 
                     addDropdownMethod.Invoke(managerInstance, new object[] {
                         "Weather Provider",
                         providerOptions,
                         providerIndex,
                         (System.Action<int>)((index) => {
-                            string[] providers = { "Seniverse", "OpenWeather" };
+                            string[] providers = { "Seniverse", "OpenWeather", "OpenMeteo" };
                             ChillEnvPlugin.Cfg_WeatherProvider.Value = providers[index];
                             ChillEnvPlugin.Instance.Config.Save();
                             ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providers[index]}");
@@ -904,13 +907,15 @@ namespace ChillWithYou.EnvSync.UI
         }
         static void CreateWeatherProviderDropdown(Transform parent, SettingUI settingUI)
         {
-            string[] providerOptions = { "Seniverse", "OpenWeather" };
-            int currentIndex = ChillEnvPlugin.Cfg_WeatherProvider.Value.Equals("OpenWeather",
-                System.StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            string[] providerOptions = { "Seniverse", "OpenWeather", "OpenMeteo" };
+            int currentIndex = 0;
+            string prov = ChillEnvPlugin.Cfg_WeatherProvider.Value;
+            if (prov.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase)) currentIndex = 1;
+            else if (prov.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase)) currentIndex = 2;
 
             CreateGenericDropdown(parent, settingUI, "WeatherProviderDropdown", "Weather Provider",
                 providerOptions, currentIndex, (index) => {
-                    string[] providers = { "Seniverse", "OpenWeather" };
+                    string[] providers = { "Seniverse", "OpenWeather", "OpenMeteo" };
                     ChillEnvPlugin.Cfg_WeatherProvider.Value = providers[index];
                     ChillEnvPlugin.Instance.Config.Save();
                     ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providers[index]}");
