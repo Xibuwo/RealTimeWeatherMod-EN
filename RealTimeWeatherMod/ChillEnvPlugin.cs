@@ -14,7 +14,7 @@ namespace ChillWithYou.EnvSync
     {
         internal static ChillEnvPlugin Instance;
         internal static ManualLogSource Log;
-        public const string PluginVersion = "5.4.9";
+        public const string PluginVersion = "5.5.0";
         internal static UnlockItemService UnlockItemServiceInstance;
 
         internal static object WindowViewServiceInstance;
@@ -59,7 +59,7 @@ namespace ChillWithYou.EnvSync
             Instance = this;
             Log = Logger;
 
-            Log.LogInfo($"【{PluginVersion}】Starting - Weather, Sunrise & Sunset Edition (OpenWeather Support)");
+            Log.LogInfo($"【{PluginVersion}】Starting - Weather, Sunrise & Sunset Edition (International Support)");
 
 
             try
@@ -100,9 +100,9 @@ namespace ChillWithYou.EnvSync
 
             Cfg_EnableWeatherSync = Config.Bind("WeatherAPI", "EnableWeatherSync", true, "Enable weather API sync");
             Cfg_EnableTimeSync = Config.Bind("TimeSync", "EnableTimeSync", true, "Enable time-based day/night cycling (works without an API key)");
-            Cfg_WeatherProvider = Config.Bind("WeatherAPI", "WeatherProvider", "OpenWeather", "Weather provider: Seniverse or OpenWeather");
-            Cfg_ApiKey = Config.Bind("WeatherAPI", "ApiKey", "fb54bc28f5545a10b8e5421869cf3bc5", "API Key (Same as GeneralAPI, Seniverse or OpenWeather)");
-            Cfg_Location = Config.Bind("WeatherAPI", "Location", "Madrid", "Location (city name for Seniverse and for OpenWeather as well. You can use lon,lat for OpenWeather)");
+            Cfg_WeatherProvider = Config.Bind("WeatherAPI", "WeatherProvider", "OpenMeteo", "Weather provider: Seniverse, OpenWeather, or OpenMeteo");
+            Cfg_ApiKey = Config.Bind("WeatherAPI", "ApiKey", "fb54bc28f5545a10b8e5421869cf3bc5", "API Key (Same as GeneralAPI, Seniverse or OpenWeather) (OpenMeteo doesn't require an API Key)");
+            Cfg_Location = Config.Bind("WeatherAPI", "Location", "Madrid", "Location (city name or you can use lon,lat)");
 
             Cfg_UnlockEnvironments = Config.Bind("Unlock", "UnlockAllEnvironments", true, "Auto unlock environments");
             Cfg_UnlockDecorations = Config.Bind("Unlock", "UnlockAllDecorations", true, "Auto unlock decorations");
