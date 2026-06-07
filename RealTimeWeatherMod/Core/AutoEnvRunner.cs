@@ -68,6 +68,9 @@ namespace ChillWithYou.EnvSync.Core
 
         private bool HasUsableApiKey()
         {
+            // OpenMeteo needs no API key
+            if (ChillEnvPlugin.Cfg_WeatherProvider.Value.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase))
+                return true;
             string apiKey = ChillEnvPlugin.Cfg_ApiKey.Value;
             return !string.IsNullOrEmpty(apiKey) || WeatherService.HasDefaultKey;
         }
