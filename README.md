@@ -14,7 +14,7 @@ A BepInEx plugin for *Chill with You – A Lo-Fi Story with You*. It synchronize
 
 ---
 
-**Note:** All code was AI-generated. Human work was limited to decompiling and fixing bugs. This fork is oriented toward using the OpenWeather API for international users.
+**Note:** All code was AI-generated. Human work was limited to decompiling and fixing bugs. This fork is oriented towards international users.
 
 ---
 
@@ -24,7 +24,7 @@ Related mod：[iGPUSaviorMod](https://github.com/Small-tailqwq/iGPUSaviorMod)
 
 ## ✨ Main Features
 
-- 🌤️ **Real-time weather sync** via Seniverse or OpenWeather APIs
+- 🌤️ **Real-time weather sync** via Seniverse, OpenWeather APIs or no APIs at all using OpenMeteo
 - 💥 **Temperature Unit** for both imperial and metric
 - 🌍 **Multi-city and multi-provider support**
 - 🌓 **Automatic day/night cycle** based on actual sunrise and sunset times
@@ -54,7 +54,7 @@ Related mod：[iGPUSaviorMod](https://github.com/Small-tailqwq/iGPUSaviorMod)
 - 💽 **Potential "cheat-like" behavior**: Unlocking environments is temporary but still modifies runtime state.
 - 💥 **Potential conflicts** with future game updates or other mods.
 - 🧷 **External API dependency** relies on third-party weather providers.
-- 😵‍💫 **AI-written code**: Expect errors. This version is currently being tested with OpenWeather's API.
+- 😵‍💫 **AI-written code**: Expect errors. 
 
 ## 🎮 Supported Environment Types
 
@@ -77,11 +77,9 @@ Triggered automatically if seasonal/automation is enabled. Includes seasonal and
 Also auto-triggered when conditions are met (e.g., cooking sounds, AC noise, cicadas).
 
 ### TO-DO
-> 🗒️ Improve and stabilize the mod for OpenWeather API usage.
+> 🗒️ Improve and stabilize the mod for general API or APIless usage.
 > 
 > 🌧️ Optimise the code
-> 
-> ⚠️ Fix critical crashing bug
 
 ## 📦 Installation
 
@@ -104,12 +102,13 @@ After the first run, a configuration file is generated here: `BepInEx/config/chi
 some settings will also appear in the in-game MOD Settings tab for convenience.
 
 ### Weather API Providers
-This fork supports both Seniverse and OpenWeather, but mainly made for OpenWeather. Select one using the `WeatherProvider` field.
+This fork supports Seniverse, OpenWeather and OpenMeteo, it was first made for OpenWeather, but added OpenMeteo later on. Select one using the `WeatherProvider` field.
 
 | Provider | Location Format | Notes |
 | :--- | :--- | :--- |
 | **Seniverse** | City name (e.g., `beijing`, `上海`) | Made for Chinese users, lower free tier quota. |
 | **OpenWeather** | City name **or** `latitude,longitude` (e.g., `40.7128,-74.0060`) | Global; 60 calls per minute free tier. |
+| **OpenMeteo** | City name **or** `latitude,longitude` (e.g., `40.7128,-74.0060`) | Global; 600 calls per minute free tier. |
 
 **Example Config Snippets**
 
@@ -120,7 +119,7 @@ EnableWeatherSync = true
 WeatherProvider = Seniverse
 ApiKey = YOUR_SENIVERSE_KEY_HERE
 # (There's a default Seniverse key already so don't worry.)
-Location = beijing
+Location = Beijing
 ```
 
 *Using OpenWeather:*
@@ -128,7 +127,18 @@ Location = beijing
 [WeatherAPI]
 EnableWeatherSync = true
 WeatherProvider = OpenWeather
-ApiKey = YOUR_OPENWEATHER_KEY_HERE
+ApiKey = YOUR_OPENWEATHER_KEY_HERE (There's a default one)
+Location = 40.7128,-74.0060
+# or use a city name:
+# Location = New York City
+```
+
+*Using OpenMeteo:*
+```ini
+[WeatherAPI]
+EnableWeatherSync = true
+WeatherProvider = OpenMeteo
+ApiKey = LEAVE_EMPTY (No need for API)
 Location = 40.7128,-74.0060
 # or use a city name:
 # Location = New York City
@@ -165,6 +175,11 @@ SimulatedText = DebugWeather
 ```
 
 ### Obtaining an API Key
+
+- **OpenMeteo**
+  1. No need for an API Key...
+  2. ...
+
 - **Seniverse:**
   1. Visit the [Seniverse Developer Platform](https://www.seniverse.com/).
   2. Register, log in, and go to `Console` -> `Product Management` -> `Free Edition` (or your subscription tier).
@@ -244,6 +259,12 @@ The plugin automatically switches base environments based on your configured (or
   - Reflection (to access internal game systems)
 
 ## 📝 Version History
+
+### v5.5.0
+- Added OpenMeteo as weather provider
+- Switched default weather provider to OpenMeteo
+- Fixed standalone UI being offset
+- Fixed minor issues
 
 ### v5.4.6
 - Fixed plugin not working after an update
@@ -362,9 +383,9 @@ MIT License. See the [LICENSE](LICENSE) file for details.
 - The original creator of this (Ko_teiru) if it weren't for him or her, I couldn't have done this with OpenWeather
 - The BepInEx team
 - Harmony library
-- Seniverse & OpenWeather API services
+- Seniverse, OpenWeather & OpenMeteo API services
 - AI Assistants: Google Gemini, OpenAI GPT, Claude and overall, Deepseek.
-- My attention span (Currently I'm watching an IG Reel of Clash Royale with SpongeBob and Patrick threatening someone)
+- Why am I updating this plugin? I have to study for my exams...
 
 ---
 
