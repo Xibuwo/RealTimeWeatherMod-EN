@@ -6,6 +6,7 @@ using HarmonyLib;
 using System;
 using System.Reflection;
 using TMPro;
+using UnityEngine;
 
 namespace ChillWithYou.EnvSync.Patches
 {
@@ -117,32 +118,39 @@ namespace ChillWithYou.EnvSync.Patches
     internal static class UserInteractionPatch
     {
         public static bool IsSimulatingClick = false;
+        private const float StartupGracePeriod = 5f;
+
         static void Prefix(EnvironmentController __instance)
         {
-            if (!IsSimulatingClick)
+            if (IsSimulatingClick) return;
+            if (SceneryAutomationSystem.IsSystemOperation) return;
+
+            // Ignore clicks that arrive while the game is still initialising
+            if (Time.realtimeSinceStartup - SceneryAutomationSystem.InitializationTime < StartupGracePeriod)
+                return;
+
+            EnvironmentType type = __instance.EnvironmentType;
+            if (!SceneryAutomationSystem.UserInteractedMods.Contains(type))
             {
-                EnvironmentType type = __instance.EnvironmentType;
-                if (!SceneryAutomationSystem.UserInteractedMods.Contains(type))
-                {
-                    SceneryAutomationSystem.UserInteractedMods.Add(type);
-                    ChillEnvPlugin.Log?.LogInfo($"[User Interaction] User took over {type}, stopping auto-management.");
-                }
-                
-                if (SceneryAutomationSystem._autoEnabledMods.Contains(type))
-                {
-                    SceneryAutomationSystem._autoEnabledMods.Remove(type);
-                    ChillEnvPlugin.Log?.LogDebug($"[User Interaction] Removed {type} from managed list");
-                }
-                
-                if (type == EnvironmentType.Whale && SceneryAutomationSystem.IsWhaleSystemTriggered)
-                {
-                    SceneryAutomationSystem.IsWhaleSystemTriggered = false;
-                    ChillEnvPlugin.Log?.LogInfo("[Whale Easter Egg] User manually closed system-triggered whale, flag cleared");
-                }
+                SceneryAutomationSystem.UserInteractedMods.Add(type);
+                ChillEnvPlugin.Log?.LogInfo($"[User Interaction] User took over {type}, stopping auto-management.");
+            }
+
+            if (SceneryAutomationSystem._autoEnabledMods.Contains(type))
+            {
+                SceneryAutomationSystem._autoEnabledMods.Remove(type);
+                ChillEnvPlugin.Log?.LogDebug($"[User Interaction] Removed {type} from managed list");
+            }
+
+            if (type == EnvironmentType.Whale && SceneryAutomationSystem.IsWhaleSystemTriggered)
+            {
+                SceneryAutomationSystem.IsWhaleSystemTriggered = false;
+                ChillEnvPlugin.Log?.LogInfo("[Whale Easter Egg] User manually closed system-triggered whale, flag cleared");
             }
         }
     }
 }
+
 [HarmonyPatch]
 internal static class UnlockStatusMonitorPatch
 {
