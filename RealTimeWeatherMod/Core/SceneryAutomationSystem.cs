@@ -13,6 +13,7 @@ namespace ChillWithYou.EnvSync.Core
     internal static HashSet<EnvironmentType> _autoEnabledMods = new HashSet<EnvironmentType>();
     public static HashSet<EnvironmentType> UserInteractedMods = new HashSet<EnvironmentType>();
 
+
     // --- 核心修复：点击冷却 + 延迟验证 ---
     private Dictionary<EnvironmentType, float> _lastClickTime = new Dictionary<EnvironmentType, float>();
     private Dictionary<EnvironmentType, PendingAction> _pendingActions = new Dictionary<EnvironmentType, PendingAction>();
@@ -32,6 +33,7 @@ namespace ChillWithYou.EnvSync.Core
       public EnvironmentType EnvType;
       public Func<bool> Condition;
       public string Name;
+      public bool IsAmbientSound = false;
     }
 
     private List<SceneryRule> _rules = new List<SceneryRule>();
@@ -70,10 +72,13 @@ namespace ChillWithYou.EnvSync.Core
     
     // 鲸鱼专属标志：标记当前鲸鱼是否为系统抽中（而非用户手动开启）
     internal static bool IsWhaleSystemTriggered = false;
+    internal static bool IsSystemOperation = false;
+    internal static float InitializationTime;
 
-    private void Start()
+        private void Start()
     {
-      InitializeRules();
+            InitializationTime = Time.realtimeSinceStartup;
+            InitializeRules();
     }
 
     private void InitializeRules()
@@ -127,7 +132,8 @@ namespace ChillWithYou.EnvSync.Core
         EnvType = Env_Sakura,
         Condition = () =>
         {
-          return GetSeason() == Season.Spring && IsDay() && IsGoodWeather();
+            int month = DateTime.Now.Month;
+            return month >= 3 && month <= 4 && IsDay() && IsGoodWeather();
         }
       });
 
@@ -474,81 +480,63 @@ namespace ChillWithYou.EnvSync.Core
       }
     }
 
-    private void EnableMod(string ruleName, EnvironmentType env)
-    {
-      // 1. 冷却检查
-      if (_lastClickTime.TryGetValue(env, out float lastTime))
-      {
-        if (Time.time - lastTime < ClickCooldown)
+        private void EnableMod(string ruleName, EnvironmentType env)
         {
-          return; // 冷却中
+            if (_lastClickTime.TryGetValue(env, out float lastTime))
+                if (Time.time - lastTime < ClickCooldown) return;
+
+            if (IsEnvActive(env))
+            {
+                _autoEnabledMods.Add(env);
+                ChillEnvPlugin.Log?.LogInfo($"[Auto Managed] Already active: {ruleName}");
+                return;
+            }
+
+            if (EnvRegistry.TryGet(env, out var ctrl))
+            {
+                ChillEnvPlugin.Log?.LogInfo($"[Auto Managed] → Enabling: {ruleName}");
+                IsSystemOperation = true;
+                try { ChillEnvPlugin.SimulateClickMainIcon(ctrl); }
+                finally { IsSystemOperation = false; }
+                _lastClickTime[env] = Time.time;
+                _pendingActions[env] = new PendingAction
+                {
+                    TargetState = true,
+                    VerifyTime = Time.time + VerifyDelay,
+                    RuleName = ruleName
+                };
+            }
         }
-      }
 
-      // 2. 再次确认当前状态
-      if (IsEnvActive(env))
-      {
-        // 已经是开启状态，直接加入托管列表
-        _autoEnabledMods.Add(env);
-        ChillEnvPlugin.Log?.LogInfo($"[自动托管] ↻ 已是开启状态: {ruleName}");
-        return;
-      }
-
-      // 3. 执行点击
-      if (EnvRegistry.TryGet(env, out var ctrl))
-      {
-        ChillEnvPlugin.Log?.LogInfo($"[自动托管] → 点击开启: {ruleName}");
-        ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-        _lastClickTime[env] = Time.time;
-
-        // 4. 登记延迟验证任务
-        _pendingActions[env] = new PendingAction
+        private void DisableMod(string ruleName, EnvironmentType env)
         {
-          TargetState = true,
-          VerifyTime = Time.time + VerifyDelay,
-          RuleName = ruleName
-        };
-      }
-    }
+            if (_lastClickTime.TryGetValue(env, out float lastTime))
+                if (Time.time - lastTime < ClickCooldown) return;
 
-    private void DisableMod(string ruleName, EnvironmentType env)
-    {
-      // 1. 冷却检查
-      if (_lastClickTime.TryGetValue(env, out float lastTime))
-      {
-        if (Time.time - lastTime < ClickCooldown)
-        {
-          return;
+            if (!IsEnvActive(env))
+            {
+                _autoEnabledMods.Remove(env);
+                ChillEnvPlugin.Log?.LogInfo($"[Auto Managed] Already inactive: {ruleName}");
+                return;
+            }
+
+            if (EnvRegistry.TryGet(env, out var ctrl))
+            {
+                ChillEnvPlugin.Log?.LogInfo($"[Auto Managed] → Disabling: {ruleName}");
+                IsSystemOperation = true;
+                try { ChillEnvPlugin.SimulateClickMainIcon(ctrl); }
+                finally { IsSystemOperation = false; }
+                _lastClickTime[env] = Time.time;
+                _pendingActions[env] = new PendingAction
+                {
+                    TargetState = false,
+                    VerifyTime = Time.time + VerifyDelay,
+                    RuleName = ruleName
+                };
+            }
         }
-      }
 
-      // 2. 再次确认当前状态
-      if (!IsEnvActive(env))
-      {
-        // 已经是关闭状态
-        _autoEnabledMods.Remove(env);
-        ChillEnvPlugin.Log?.LogInfo($"[自动托管] ↻ 已是关闭状态: {ruleName}");
-        return;
-      }
-
-      // 3. 执行点击
-      if (EnvRegistry.TryGet(env, out var ctrl))
-      {
-        ChillEnvPlugin.Log?.LogInfo($"[自动托管] → 点击关闭: {ruleName}");
-        ChillEnvPlugin.SimulateClickMainIcon(ctrl);
-        _lastClickTime[env] = Time.time;
-
-        // 4. 登记延迟验证任务
-        _pendingActions[env] = new PendingAction
-        {
-          TargetState = false,
-          VerifyTime = Time.time + VerifyDelay,
-          RuleName = ruleName
-        };
-      }
-    }
-
-    private void CleanupAllAutoMods()
+        private void CleanupAllAutoMods()
     {
       List<EnvironmentType> toClean = new List<EnvironmentType>(_autoEnabledMods);
       foreach (var env in toClean)

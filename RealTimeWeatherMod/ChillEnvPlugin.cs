@@ -234,28 +234,29 @@ namespace ChillWithYou.EnvSync
             }
 
             if (targetUI == null) return;
+
             try
             {
-                var changeTimeMethod = AccessTools.Method(targetUI.GetType(), "ChangeTime");
-                if (changeTimeMethod != null)
+                var method = AccessTools.Method(targetUI.GetType(), "OnClickButtonChangeTime");
+                if (method != null)
                 {
-                    var parameters = changeTimeMethod.GetParameters();
+                    var parameters = method.GetParameters();
                     if (parameters.Length > 0)
                     {
                         Type targetEnumType = parameters[0].ParameterType;
                         object enumValue = Enum.Parse(targetEnumType, envType.ToString());
-                        changeTimeMethod.Invoke(targetUI, new object[] { enumValue });
-                        Log?.LogInfo($"[Service] 🌧️ Weather switched and state synced: {envType}");
+                        method.Invoke(targetUI, new object[] { enumValue });
+                        Log?.LogInfo($"[Service] Environment switched: {envType}");
                     }
                 }
                 else
                 {
-                    Log?.LogError("[Service] ❌ ChangeTime method not found, game version may be incompatible");
+                    Log?.LogError("[Service] ❌ The OnClickButtonChangeTime method was not found");
                 }
             }
             catch (Exception ex)
             {
-                Log?.LogError($"[Service] ❌ ChangeTime call failed: {ex.Message}");
+                Log?.LogError($"[Service] ❌ Call failed: { ex.Message}");
             }
         }
 
