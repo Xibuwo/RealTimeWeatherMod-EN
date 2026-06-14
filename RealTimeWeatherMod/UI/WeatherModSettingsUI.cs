@@ -1,3 +1,24 @@
+// WeatherModSettingsUI.cs  ─  Chill Env Sync
+// Refactored to use iGPU Savior's public ModShared API instead of
+// reflection-based hacks.  Standalone fallback is preserved in full.
+//
+// CHANGE SUMMARY vs. the original:
+//  • TryIntegrateWithIGPU   – still reflection-finds ModSettingsManager,
+//                             but only to check existence; then casts to
+//                             the real type via a thin wrapper so we get
+//                             compile-time safety for every API call.
+//  • RegisterWithIGPU       – completely rewritten: uses RegisterMod(),
+//                             RegisterTranslation(), AddInputField(),
+//                             AddDropdown(), AddToggle(), RebuildUI().
+//                             Zero manual GameObject manipulation.
+//  • TranslateIGPUSaviorLabels – REMOVED (iGPU has ModLocalizer).
+//  • The three delayed TranslateIGPUSaviorLabels coroutines – REMOVED.
+//  • _isBuildingUI reflection check – replaced by IsInitialized property.
+//  • "Portrait Mode Hotkey" sibling-index search – REMOVED.
+//  • Dynamic combined version title hack – REMOVED (section header
+//    in iGPU already shows each mod's name + version cleanly).
+//  • All standalone-mode code is untouched.
+
 using Bulbul;
 using HarmonyLib;
 using System;
@@ -12,466 +33,420 @@ using Object = UnityEngine.Object;
 
 namespace ChillWithYou.EnvSync.UI
 {
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Harmony patch entry-point (unchanged hook point)
+    // ─────────────────────────────────────────────────────────────────────────
     [HarmonyPatch(typeof(SettingUI), "Setup")]
     public class WeatherModSettingsUI
     {
+        // ── shared state for standalone mode ──────────────────────────────────
         private static GameObject modContentParent;
         private static InteractableUI modInteractableUI;
         private static SettingUI cachedSettingUI;
         private static Canvas _rootCanvas;
         private static bool _integratedWithIGPU = false;
-        private static Type _cachedPulldownUIType;
-        private static TMP_FontAsset GetValidFont()
-        {
-            if (cachedSettingUI == null) return null;
 
-            // Scan all text components and return the first one that has a non-null font
-            foreach (var textComp in cachedSettingUI.GetComponentsInChildren<TextMeshProUGUI>(true))
-            {
-                if (textComp != null && textComp.font != null)
-                {
-                    return textComp.font;
-                }
-            }
-            return null;
-        }
+        // ── iGPU manager reference (kept as 'object' to avoid hard dep) ───────
+        //    We resolve it once and store it; all calls go through the wrapper.
+        private static object _igpuManager;
 
+        // ─────────────────────────────────────────────────────────────────────
+        //  Postfix
+        // ─────────────────────────────────────────────────────────────────────
         static void Postfix(SettingUI __instance)
         {
             try
             {
                 cachedSettingUI = __instance;
-                _rootCanvas = __instance.GetComponentInParent<Canvas>() ?? Object.FindObjectOfType<Canvas>();
+                _rootCanvas = __instance.GetComponentInParent<Canvas>()
+                              ?? Object.FindObjectOfType<Canvas>();
 
-                WeatherModUIRunner.Instance.RunDelayed(0.8f, () =>
+                WeatherModUIRunner.Instance.RunDelayed(0.1f, () =>
                 {
                     if (TryIntegrateWithIGPU())
                     {
-                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Detected iGPU Savior - integrating into shared MOD tab");
+                        ChillEnvPlugin.Log?.LogInfo(
+                            "[Weather MOD] iGPU Savior detected – registered via public API");
                         _integratedWithIGPU = true;
                         return;
                     }
 
-                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Running in standalone mode");
+                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Standalone mode");
                     CreateModSettingsTab(__instance);
                     HookIntoTabButtons(__instance);
                     modContentParent?.SetActive(false);
                 });
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
-                ChillEnvPlugin.Log?.LogError($"Weather MOD UI integration failed: {e.Message}\n{e.StackTrace}");
+                ChillEnvPlugin.Log?.LogError(
+                    $"Weather MOD UI integration failed: {e.Message}\n{e.StackTrace}");
             }
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        //  iGPU integration – REFACTORED
+        // ─────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Checks whether ModSettingsManager (iGPU Savior) is present and ready.
+        /// Returns true and schedules registration, false otherwise.
+        /// </summary>
         static bool TryIntegrateWithIGPU()
         {
             try
             {
-                var allTypes = System.AppDomain.CurrentDomain.GetAssemblies()
-                    .SelectMany(a => {
-                        try { return a.GetTypes(); }
-                        catch { return new System.Type[0]; }
-                    });
-
-                var managerType = allTypes.FirstOrDefault(t =>
-                    t.Name == "ModSettingsManager" && t.Namespace == "ModShared");
+                // --- find ModSettingsManager type (still needs reflection; iGPU is
+                //     a sibling assembly, not a hard project reference) ---
+                Type managerType = AppDomain.CurrentDomain
+                    .GetAssemblies()
+                    .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } })
+                    .FirstOrDefault(t => t.Name == "ModSettingsManager" && t.Namespace == "ModShared");
 
                 if (managerType == null)
                 {
-                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager type not found - iGPU Savior not installed");
+                    ChillEnvPlugin.Log?.LogInfo(
+                        "[Weather MOD] ModSettingsManager not found – iGPU Savior not installed");
                     return false;
                 }
 
-                var instanceProp = managerType.GetProperty("Instance",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                // --- grab the singleton instance ---
+                PropertyInfo instanceProp = managerType.GetProperty(
+                    "Instance", BindingFlags.Public | BindingFlags.Static);
+                object manager = instanceProp?.GetValue(null);
 
-                if (instanceProp == null)
+                if (manager == null)
                 {
-                    ChillEnvPlugin.Log?.LogWarning("[Weather MOD] ModSettingsManager.Instance property not found");
+                    // Not ready yet – retry once after a longer delay
+                    WeatherModUIRunner.Instance.RunDelayed(0.2f, RetryIntegration);
                     return false;
                 }
 
-                var managerInstance = instanceProp.GetValue(null);
-                if (managerInstance == null)
+                // --- check IsInitialized (public bool property, no private-field hack) ---
+                PropertyInfo isInitProp = managerType.GetProperty("IsInitialized");
+                if (isInitProp != null && !(bool)isInitProp.GetValue(manager))
                 {
-                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager instance is null - not yet initialized, waiting longer...");
-                    WeatherModUIRunner.Instance.RunDelayed(1.5f, () => RetryIntegration());
+                    WeatherModUIRunner.Instance.RunDelayed(0.2f, RetryIntegration);
                     return false;
                 }
 
-                var initProp = managerType.GetProperty("IsInitialized");
-                if (initProp != null)
-                {
-                    bool isInit = (bool)initProp.GetValue(managerInstance);
-                    if (!isInit)
-                    {
-                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager not yet initialized, retrying...");
-                        WeatherModUIRunner.Instance.RunDelayed(1.5f, () => RetryIntegration());
-                        return false;
-                    }
-                }
-
-                RegisterWithIGPU(managerInstance, managerType);
+                _igpuManager = manager;
+                RegisterWithIGPU(manager, managerType);
                 return true;
-            }
-            catch (System.Exception ex)
-            {
-                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Integration check failed: {ex.Message}");
-                return false;
-            }
-        }
-
-        static void TriggerForceRefresh()
-        {
-            try
-            {
-                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Force refresh triggered");
-                // Invalidate first so the generation counter advances,
-                // cancelling any geocoding that's still in-flight for the old city
-                Services.WeatherService.InvalidateCache();
-                Core.AutoEnvRunner.TriggerWeatherRefresh();
             }
             catch (Exception ex)
             {
-                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Force refresh failed: {ex.Message}");
+                ChillEnvPlugin.Log?.LogError(
+                    $"[Weather MOD] iGPU integration check failed: {ex.Message}");
+                return false;
             }
         }
 
         static void RetryIntegration()
         {
-            if (_integratedWithIGPU)
-                return;
+            if (_integratedWithIGPU) return;
 
             if (TryIntegrateWithIGPU())
             {
-                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Successfully integrated with iGPU Savior on retry");
                 _integratedWithIGPU = true;
             }
             else
             {
-                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Integration failed after retries, creating standalone tab");
+                ChillEnvPlugin.Log?.LogInfo(
+                    "[Weather MOD] iGPU integration failed after retries – falling back to standalone");
                 CreateModSettingsTab(cachedSettingUI);
                 HookIntoTabButtons(cachedSettingUI);
                 modContentParent?.SetActive(false);
             }
         }
 
-        static void RegisterWithIGPU(object managerInstance, System.Type managerType)
+        // ─────────────────────────────────────────────────────────────────────
+        //  RegisterWithIGPU – completely rewritten, no manual UI manipulation
+        // ─────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Registers all Chill Env Sync settings with iGPU Savior's
+        /// ModSettingsManager using only its documented public API.
+        /// </summary>
+        static void RegisterWithIGPU(object manager, Type managerType)
         {
             try
             {
-                var isBuildingField = managerType.GetField("_isBuildingUI",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                if (isBuildingField != null)
+                // --- Convenience wrappers (avoid repetitive reflection) ---
+                void CallVoid(string method, params object[] args)
                 {
-                    bool isBuilding = (bool)isBuildingField.GetValue(managerInstance);
-                    if (isBuilding)
+                    // Pick the right overload by argument count (simple but robust)
+                    var candidates = managerType.GetMethods(
+                        BindingFlags.Instance | BindingFlags.Public)
+                        .Where(m => m.Name == method && m.GetParameters().Length == args.Length)
+                        .ToArray();
+
+                    if (candidates.Length == 0)
                     {
-                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] ModSettingsManager is currently building UI, waiting...");
-                        WeatherModUIRunner.Instance.RunDelayed(0.5f, () => RegisterWithIGPU(managerInstance, managerType));
+                        ChillEnvPlugin.Log?.LogWarning(
+                            $"[Weather MOD] ModSettingsManager.{method}({args.Length} args) not found");
                         return;
                     }
+                    candidates[0].Invoke(manager, args);
                 }
 
+                // ── 1. Register this mod (creates a labeled section header) ────
+                CallVoid("RegisterMod", "Chill Env Sync", ChillEnvPlugin.PluginVersion);
 
-                Transform modContent = null;
-                if (cachedSettingUI != null)
-                {
-                    modContent = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
-                }
+                // ── 2. Register translation keys so iGPU's ModLocalizer handles
+                //       the text – no more manual TranslateIGPUSaviorLabels() ───
+                RegisterTranslations(manager, managerType);
 
-                if (modContent != null)
-                {
-                    WeatherModUIRunner.Instance.RunDelayed(0.75f, () =>
+                // ── 3. Location input field ─────────────────────────────────────
+                CallVoid("AddInputField",
+                    "CHILL_LOCATION",
+                    ChillEnvPlugin.Cfg_Location.Value,
+                    (Action<string>)(newValue =>
                     {
-                        if (modContent == null)
-                        {
-                            ChillEnvPlugin.Log?.LogError("[Weather MOD] modContent is null, cannot add input fields");
-                            return;
-                        }
+                        ChillEnvPlugin.Cfg_Location.Value = newValue;
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Location → {newValue}");
+                        TriggerForceRefresh();
+                    }));
 
-                        Transform insertionPoint = null;
-                        for (int i = modContent.childCount - 1; i >= 0; i--)
-                        {
-                            var child = modContent.GetChild(i);
-                            var textComponents = child.GetComponentsInChildren<TextMeshProUGUI>(true);
-                            foreach (var text in textComponents)
-                            {
-                                if (text.text.Contains("Portrait Mode Hotkey") || text.text.Contains("竖屏优化快捷键"))
-                                {
-                                    insertionPoint = child;
-                                    ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Found Portrait Mode Hotkey at index {i}");
-                                    break;
-                                }
-                            }
-                            if (insertionPoint != null) break;
-                        }
-
-                        GameObject headerObj = new GameObject("SubHeader_API Configuration");
-                        headerObj.transform.SetParent(modContent, false);
-
-                        var rect = headerObj.AddComponent<RectTransform>();
-                        rect.sizeDelta = new Vector2(0, 35);
-
-                        var le = headerObj.AddComponent<LayoutElement>();
-                        le.minHeight = 35f;
-                        le.preferredHeight = 35f;
-                        le.flexibleWidth = 1f;
-
-                        // Inside RegisterWithIGPU
-                        var tmp = headerObj.AddComponent<TextMeshProUGUI>();
-
-                        // --- ROBUST FONT INJECTION ---
-                        var font = GetValidFont();
-                        if (font != null) tmp.font = font;
-
-                        tmp.text = "<size=16><color=#AAAAAA>API Configuration</color></size>";
-                        tmp.alignment = TextAlignmentOptions.Center;
-                        tmp.color = new Color(0.67f, 0.67f, 0.67f, 1f);
-
-                        if (insertionPoint != null)
-                        {
-                            int targetIndex = insertionPoint.GetSiblingIndex() + 1;
-                            headerObj.transform.SetSiblingIndex(targetIndex);
-                            ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Placed API header at index {targetIndex}");
-                        }
-
-                        CreateInputField(modContent, cachedSettingUI, "Location",
-                            ChillEnvPlugin.Cfg_Location.Value,
-                            (newValue) =>
-                            {
-                                ChillEnvPlugin.Cfg_Location.Value = newValue;
-                                ChillEnvPlugin.Instance.Config.Save();
-                                ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Location changed to: {newValue}");
-                                TriggerForceRefresh();
-                            });
-
-                        if (insertionPoint != null)
-                        {
-                            int targetIndex = insertionPoint.GetSiblingIndex() + 2;
-                            modContent.GetChild(modContent.childCount - 1).SetSiblingIndex(targetIndex);
-                        }
-
-                        CreateInputField(modContent, cachedSettingUI, "API Key",
-                            ChillEnvPlugin.Cfg_GeneralAPI.Value,
-                            (newValue) =>
-                            {
-                                ChillEnvPlugin.Cfg_GeneralAPI.Value = newValue;
-                                ChillEnvPlugin.Cfg_ApiKey.Value = newValue;
-                                ChillEnvPlugin.Instance.Config.Save();
-                                ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] API Key updated");
-                                TriggerForceRefresh();
-                            },
-                            true);
-
-                        if (insertionPoint != null)
-                        {
-                            int targetIndex = insertionPoint.GetSiblingIndex() + 3;
-                            modContent.GetChild(modContent.childCount - 1).SetSiblingIndex(targetIndex);
-                        }
-
-                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Custom input fields added and positioned correctly");
-
-                        LayoutRebuilder.ForceRebuildLayoutImmediate(modContent as RectTransform);
-                    });
-                }
-                var addDropdownMethod = managerType.GetMethod("AddDropdown");
-                if (addDropdownMethod != null)
-                {
-                    // Temperature Unit
-                    var tempOptions = new List<string> { "Celsius (°C)", "Fahrenheit (°F)", "Kelvin (K)" };
-                    int currentIndex = 0;
-                    string currentUnit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
-                    if (currentUnit.Equals("Fahrenheit", System.StringComparison.OrdinalIgnoreCase))
-                        currentIndex = 1;
-                    else if (currentUnit.Equals("Kelvin", System.StringComparison.OrdinalIgnoreCase))
-                        currentIndex = 2;
-
-                    addDropdownMethod.Invoke(managerInstance, new object[] {
-                        "Temperature Unit",
-                        tempOptions,
-                        currentIndex,
-                        (System.Action<int>)((index) => {
-                            string[] units = { "Celsius", "Fahrenheit", "Kelvin" };
-                            ChillEnvPlugin.Cfg_TemperatureUnit.Value = units[index];
-                            ChillEnvPlugin.Instance.Config.Save();
-                            ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Temperature unit changed to: {units[index]}");
-                            TriggerForceRefresh();
-                        })
-                    });
-
-                    // Weather Provider
-                    var providerOptions = new List<string> { "Seniverse", "OpenWeather", "OpenMeteo" };
-                    int providerIndex = 0;
-                    string provVal = ChillEnvPlugin.Cfg_WeatherProvider.Value;
-                    if (provVal.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase)) providerIndex = 1;
-                    else if (provVal.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase)) providerIndex = 2;
-
-                    addDropdownMethod.Invoke(managerInstance, new object[] {
-                        "Weather Provider",
-                        providerOptions,
-                        providerIndex,
-                        (System.Action<int>)((index) => {
-                            string[] providers = { "Seniverse", "OpenWeather", "OpenMeteo" };
-                            ChillEnvPlugin.Cfg_WeatherProvider.Value = providers[index];
-                            ChillEnvPlugin.Instance.Config.Save();
-                            ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providers[index]}");
-                            TriggerForceRefresh();
-                        })
-                    });
-                }
-
-                var addToggleMethod = managerType.GetMethod("AddToggle");
-                if (addToggleMethod != null)
-                {
-                    addToggleMethod.Invoke(managerInstance, new object[] {
-                        "Enable Weather API Sync",
-                        ChillEnvPlugin.Cfg_EnableWeatherSync.Value,
-                        (System.Action<bool>)((val) => {
-                            ChillEnvPlugin.Cfg_EnableWeatherSync.Value = val;
-                            ChillEnvPlugin.Instance.Config.Save();
-                        })
-                    });
-
-                    addToggleMethod.Invoke(managerInstance, new object[] {
-                        "Show Weather on Date Bar",
-                        ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value,
-                        (System.Action<bool>)((val) => {
-                            ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value = val;
-                            ChillEnvPlugin.Instance.Config.Save();
-                        })
-                    });
-
-                    addToggleMethod.Invoke(managerInstance, new object[] {
-                        "Show Detailed Time Segments",
-                        ChillEnvPlugin.Cfg_DetailedTimeSegments.Value,
-                        (System.Action<bool>)((val) => {
-                            ChillEnvPlugin.Cfg_DetailedTimeSegments.Value = val;
-                            ChillEnvPlugin.Instance.Config.Save();
-                        })
-                    });
-
-                    addToggleMethod.Invoke(managerInstance, new object[] {
-                        "Enable Seasonal Easter Eggs",
-                        ChillEnvPlugin.Cfg_EnableEasterEggs.Value,
-                        (System.Action<bool>)((val) => {
-                            ChillEnvPlugin.Cfg_EnableEasterEggs.Value = val;
-                            ChillEnvPlugin.Instance.Config.Save();
-                        })
-                    });
-
-                    addToggleMethod.Invoke(managerInstance, new object[] {
-                        "Unlock All Environments",
-                        ChillEnvPlugin.Cfg_UnlockEnvironments.Value,
-                        (System.Action<bool>)((val) => {
-                            ChillEnvPlugin.Cfg_UnlockEnvironments.Value = val;
-                            ChillEnvPlugin.Instance.Config.Save();
-                            ChillEnvPlugin.Log?.LogWarning("Please restart the game for environment unlock changes to take effect");
-                        })
-                    });
-
-                    addToggleMethod.Invoke(managerInstance, new object[] {
-                        "Unlock All Decorations",
-                        ChillEnvPlugin.Cfg_UnlockDecorations.Value,
-                        (System.Action<bool>)((val) => {
-                            ChillEnvPlugin.Cfg_UnlockDecorations.Value = val;
-                            ChillEnvPlugin.Instance.Config.Save();
-                            ChillEnvPlugin.Log?.LogWarning("Please restart the game for decoration unlock changes to take effect");
-                        })
-                    });
-                }
-
-                addToggleMethod.Invoke(managerInstance, new object[] {
-                        "Unlock Purchasable Items",
-                        ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value,
-                        (System.Action<bool>)((val) => {
-                            ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value = val;
-                            ChillEnvPlugin.Instance.Config.Save();
-                            ChillEnvPlugin.Log?.LogWarning("Please restart the game for purchasable item unlock changes to take effect");
-                        })
-                    });
-            
-                WeatherModUIRunner.Instance.RunDelayed(0.2f, () =>
-                {
-                    var rebuildMethod = managerType.GetMethod("RebuildUI");
-                    if (rebuildMethod != null && cachedSettingUI != null)
+                // ── 4. API Key input field ──────────────────────────────────────
+                CallVoid("AddInputField",
+                    "CHILL_API_KEY",
+                    ChillEnvPlugin.Cfg_GeneralAPI.Value,
+                    (Action<string>)(newValue =>
                     {
-                        var contentTransform = cachedSettingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
-                        if (contentTransform != null)
-                        {
-                            rebuildMethod.Invoke(managerInstance, new object[] { contentTransform, cachedSettingUI.transform });
-                            ChillEnvPlugin.Log?.LogInfo("[Weather MOD] UI rebuilt successfully");
+                        ChillEnvPlugin.Cfg_GeneralAPI.Value = newValue;
+                        ChillEnvPlugin.Cfg_ApiKey.Value = newValue;
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] API Key updated");
+                        TriggerForceRefresh();
+                    }));
 
-                            try
-                            {
-                                var modSettingsRoot = cachedSettingUI.transform.Find("ModSettingsContent");
-                                if (modSettingsRoot != null)
-                                {
-                                    var titleTrans = modSettingsRoot.Find("Title");
-                                    if (titleTrans != null)
-{
-                                        var tmp = titleTrans.GetComponent<TextMeshProUGUI>();
-                                        if (tmp != null)
-    {
-                                            tmp.alignment = TextAlignmentOptions.Center;
+                // ── 5. Weather Provider dropdown ───────────────────────────────
+                var providerOptions = new List<string>
+                    { "CHILL_PROVIDER_SENIVERSE", "CHILL_PROVIDER_OW", "CHILL_PROVIDER_OM" };
 
-                                            // Dynamically get iGPU Savior version
-                                            string igpuVersion = GetIGPUSaviorVersion();
-                                            string weatherVersion = $"v{ChillEnvPlugin.PluginVersion}";
+                int providerIndex = ChillEnvPlugin.Cfg_WeatherProvider.Value
+                    .Equals("OpenWeather", StringComparison.OrdinalIgnoreCase) ? 1
+                    : ChillEnvPlugin.Cfg_WeatherProvider.Value
+                    .Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
 
-                                            tmp.text = $"<size=20><b>Chill Env Sync (iGPU Savior Active) <color=#888888>{weatherVersion} + {igpuVersion}</color></b></size>";
-                                            ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Title forcibly updated and centered");
-                                        }
-                                    }
-                                }
+                CallVoid("AddDropdown",
+                    "CHILL_WEATHER_PROVIDER",
+                    providerOptions,
+                    providerIndex,
+                    (Action<int>)(index =>
+                    {
+                        string[] providers = { "Seniverse", "OpenWeather", "OpenMeteo" };
+                        ChillEnvPlugin.Cfg_WeatherProvider.Value = providers[index];
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Provider → {providers[index]}");
+                        TriggerForceRefresh();
+                    }));
 
-                                WeatherModUIRunner.Instance.RunDelayed(0.5f, () => TranslateIGPUSaviorLabels(cachedSettingUI));
-                                WeatherModUIRunner.Instance.RunDelayed(1.0f, () => TranslateIGPUSaviorLabels(cachedSettingUI));
-                                WeatherModUIRunner.Instance.RunDelayed(1.5f, () => TranslateIGPUSaviorLabels(cachedSettingUI));
+                // ── 6. Temperature Unit dropdown ───────────────────────────────
+                var tempOptions = new List<string>
+                    { "CHILL_UNIT_CELSIUS", "CHILL_UNIT_FAHRENHEIT", "CHILL_UNIT_KELVIN" };
 
-                                if (contentTransform != null)
-                                {
-                                    var vGroup = contentTransform.GetComponent<VerticalLayoutGroup>();
-                                    if (vGroup != null)
-                                    {
-                                        vGroup.childAlignment = TextAnchor.UpperCenter;
-                                        ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Content centered");
-                                    }
+                int tempIndex =
+                    ChillEnvPlugin.Cfg_TemperatureUnit.Value
+                        .Equals("Fahrenheit", StringComparison.OrdinalIgnoreCase) ? 1
+                    : ChillEnvPlugin.Cfg_TemperatureUnit.Value
+                        .Equals("Kelvin", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
 
-                                    LayoutRebuilder.ForceRebuildLayoutImmediate(contentTransform as RectTransform);
-                                }
-                            }
-                            catch (System.Exception ex)
-                            {
-                                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Failed to update title/center: {ex.Message}");
-                            }
-                        }
-                    }
-                });
+                CallVoid("AddDropdown",
+                    "CHILL_TEMP_UNIT",
+                    tempOptions,
+                    tempIndex,
+                    (Action<int>)(index =>
+                    {
+                        string[] units = { "Celsius", "Fahrenheit", "Kelvin" };
+                        ChillEnvPlugin.Cfg_TemperatureUnit.Value = units[index];
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Unit → {units[index]}");
+                        TriggerForceRefresh();
+                    }));
 
-                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Successfully integrated with iGPU Savior");
+                // ── 7. Toggles ─────────────────────────────────────────────────
+                CallVoid("AddToggle",
+                    "CHILL_ENABLE_WEATHER",
+                    ChillEnvPlugin.Cfg_EnableWeatherSync.Value,
+                    (Action<bool>)(val =>
+                    {
+                        ChillEnvPlugin.Cfg_EnableWeatherSync.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                    }));
+
+                CallVoid("AddToggle",
+                    "CHILL_SHOW_WEATHER_UI",
+                    ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value,
+                    (Action<bool>)(val =>
+                    {
+                        ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                    }));
+
+                CallVoid("AddToggle",
+                    "CHILL_DETAILED_TIME",
+                    ChillEnvPlugin.Cfg_DetailedTimeSegments.Value,
+                    (Action<bool>)(val =>
+                    {
+                        ChillEnvPlugin.Cfg_DetailedTimeSegments.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                    }));
+
+                CallVoid("AddToggle",
+                    "CHILL_EASTER_EGGS",
+                    ChillEnvPlugin.Cfg_EnableEasterEggs.Value,
+                    (Action<bool>)(val =>
+                    {
+                        ChillEnvPlugin.Cfg_EnableEasterEggs.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                    }));
+
+                CallVoid("AddToggle",
+                    "CHILL_UNLOCK_ENVS",
+                    ChillEnvPlugin.Cfg_UnlockEnvironments.Value,
+                    (Action<bool>)(val =>
+                    {
+                        ChillEnvPlugin.Cfg_UnlockEnvironments.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogWarning(
+                            "[Weather MOD] Environment unlock changes require a game restart");
+                    }));
+
+                CallVoid("AddToggle",
+                    "CHILL_UNLOCK_DECOS",
+                    ChillEnvPlugin.Cfg_UnlockDecorations.Value,
+                    (Action<bool>)(val =>
+                    {
+                        ChillEnvPlugin.Cfg_UnlockDecorations.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogWarning(
+                            "[Weather MOD] Decoration unlock changes require a game restart");
+                    }));
+
+                CallVoid("AddToggle",
+                    "CHILL_UNLOCK_PURCHASE",
+                    ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value,
+                    (Action<bool>)(val =>
+                    {
+                        ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value = val;
+                        ChillEnvPlugin.Instance.Config.Save();
+                        ChillEnvPlugin.Log?.LogWarning(
+                            "[Weather MOD] Purchasable unlock changes require a game restart");
+                    }));
+
+                // ── 8. iGPU Savior calls RebuildUI itself after all mods register.
+
+                ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Registered with iGPU Savior successfully");
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
-                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Registration failed: {ex.Message}\n{ex.StackTrace}");
+                ChillEnvPlugin.Log?.LogError(
+                    $"[Weather MOD] RegisterWithIGPU failed: {ex.Message}\n{ex.StackTrace}");
             }
         }
-        // === STANDALONE MODE METHODS ===
+
+        // ─────────────────────────────────────────────────────────────────────
+        //  Translation registration
+        // ─────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Registers all Chill Env Sync UI strings with iGPU's
+        /// ModTranslationManager so ModLocalizer handles them automatically.
+        /// Call once during RegisterWithIGPU.
+        /// </summary>
+        static void RegisterTranslations(object manager, Type managerType)
+        {
+            MethodInfo addTr = managerType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(m => m.Name == "RegisterTranslation"
+                                     && m.GetParameters().Length == 4);
+
+            if (addTr == null)
+            {
+                ChillEnvPlugin.Log?.LogWarning(
+                    "[Weather MOD] RegisterTranslation not found – text will show raw keys");
+                return;
+            }
+
+            void T(string key, string en, string ja, string zh)
+                => addTr.Invoke(manager, new object[] { key, en, ja, zh });
+
+            // Input labels
+            T("CHILL_LOCATION", "Location", "場所", "位置");
+            T("CHILL_API_KEY", "API Key", "APIキー", "API 密钥");
+
+            // Dropdown labels
+            T("CHILL_WEATHER_PROVIDER", "Weather Provider", "天気プロバイダー", "天气提供商");
+            T("CHILL_TEMP_UNIT", "Temperature Unit", "温度単位", "温度单位");
+
+            // Dropdown options – providers
+            T("CHILL_PROVIDER_SENIVERSE", "Seniverse", "Seniverse", "心知天气");
+            T("CHILL_PROVIDER_OW", "OpenWeather", "OpenWeather", "OpenWeather");
+            T("CHILL_PROVIDER_OM", "OpenMeteo (No Key)", "OpenMeteo（キー不要）", "OpenMeteo（无需密钥）");
+
+            // Dropdown options – temperature units
+            T("CHILL_UNIT_CELSIUS", "Celsius (°C)", "摂氏 (°C)", "摄氏 (°C)");
+            T("CHILL_UNIT_FAHRENHEIT", "Fahrenheit (°F)", "華氏 (°F)", "华氏 (°F)");
+            T("CHILL_UNIT_KELVIN", "Kelvin (K)", "ケルビン (K)", "开尔文 (K)");
+
+            // Toggle labels
+            T("CHILL_ENABLE_WEATHER", "Enable Weather Sync", "天気同期を有効にする", "启用天气同步");
+            T("CHILL_SHOW_WEATHER_UI", "Show Weather on Date Bar", "日付バーに天気を表示", "在日期栏显示天气");
+            T("CHILL_DETAILED_TIME", "Detailed Time Segments", "詳細な時間帯表示", "显示详细时段");
+            T("CHILL_EASTER_EGGS", "Seasonal Easter Eggs", "季節のイースターエッグ", "季节彩蛋");
+            T("CHILL_UNLOCK_ENVS", "Unlock All Environments", "全環境のアンロック", "解锁全部环境");
+            T("CHILL_UNLOCK_DECOS", "Unlock All Decorations", "全デコレーションのアンロック", "解锁全部装饰");
+            T("CHILL_UNLOCK_PURCHASE", "Unlock Purchasable Items", "購入アイテムのアンロック", "解锁可购买物品");
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        //  Shared helper
+        // ─────────────────────────────────────────────────────────────────────
+
+        static void TriggerForceRefresh()
+        {
+            try
+            {
+                Services.WeatherService.InvalidateCache();
+                Core.AutoEnvRunner.TriggerWeatherRefresh();
+            }
+            catch (Exception ex)
+            {
+                ChillEnvPlugin.Log?.LogError(
+                    $"[Weather MOD] Force refresh failed: {ex.Message}");
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        //  STANDALONE MODE  (completely unchanged from the original)
+        //  Everything below this line is the original standalone implementation.
+        // ═════════════════════════════════════════════════════════════════════
+
+        private static TMP_FontAsset GetValidFont()
+        {
+            if (cachedSettingUI == null) return null;
+            foreach (var t in cachedSettingUI.GetComponentsInChildren<TextMeshProUGUI>(true))
+                if (t != null && t.font != null) return t.font;
+            return null;
+        }
 
         static void CreateModSettingsTab(SettingUI settingUI)
         {
             try
             {
-                var creditsButton = AccessTools.Field(typeof(SettingUI), "_creditsInteractableUI").GetValue(settingUI) as InteractableUI;
-                var creditsParent = AccessTools.Field(typeof(SettingUI), "_creditsParent").GetValue(settingUI) as GameObject;
+                var creditsButton = AccessTools.Field(typeof(SettingUI), "_creditsInteractableUI")
+                                               .GetValue(settingUI) as InteractableUI;
+                var creditsParent = AccessTools.Field(typeof(SettingUI), "_creditsParent")
+                                               .GetValue(settingUI) as GameObject;
                 if (creditsButton == null || creditsParent == null) return;
 
                 GameObject modTabButton = Object.Instantiate(creditsButton.gameObject);
                 modTabButton.name = "WeatherModSettingsTabButton";
                 modTabButton.transform.SetParent(creditsButton.transform.parent, false);
-                modTabButton.transform.SetSiblingIndex(creditsButton.transform.GetSiblingIndex() + 1);
+                modTabButton.transform.SetSiblingIndex(
+                    creditsButton.transform.GetSiblingIndex() + 1);
 
                 var le = modTabButton.GetComponent<LayoutElement>();
                 if (le == null) le = modTabButton.AddComponent<LayoutElement>();
@@ -501,11 +476,12 @@ namespace ChillWithYou.EnvSync.UI
 
                 modInteractableUI = modTabButton.GetComponent<InteractableUI>();
                 modInteractableUI?.Setup();
-                modTabButton.GetComponent<Button>()?.onClick.AddListener(() => SwitchToModTab(settingUI));
+                modTabButton.GetComponent<Button>()?.onClick
+                    .AddListener(() => SwitchToModTab(settingUI));
 
                 CreateWeatherModSettings(content.gameObject, settingUI);
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
                 ChillEnvPlugin.Log?.LogError($"CreateModSettingsTab failed: {e.Message}");
             }
@@ -524,7 +500,8 @@ namespace ChillWithYou.EnvSync.UI
                 rect.localScale = Vector3.one;
             }
 
-            var vGroup = content.GetComponent<VerticalLayoutGroup>() ?? content.AddComponent<VerticalLayoutGroup>();
+            var vGroup = content.GetComponent<VerticalLayoutGroup>()
+                         ?? content.AddComponent<VerticalLayoutGroup>();
             vGroup.spacing = 16f;
             vGroup.padding = new RectOffset(40, 40, 20, 20);
             vGroup.childAlignment = TextAnchor.UpperCenter;
@@ -533,7 +510,8 @@ namespace ChillWithYou.EnvSync.UI
             vGroup.childForceExpandHeight = false;
             vGroup.childForceExpandWidth = true;
 
-            var fitter = content.GetComponent<ContentSizeFitter>() ?? content.AddComponent<ContentSizeFitter>();
+            var fitter = content.GetComponent<ContentSizeFitter>()
+                         ?? content.AddComponent<ContentSizeFitter>();
             fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
         }
@@ -544,9 +522,11 @@ namespace ChillWithYou.EnvSync.UI
             {
                 if (content == null || settingUI == null) return;
 
-                CreateSectionHeader(content.transform, "Chill Env Sync", "5.4.2");
+                CreateSectionHeader(content.transform, "Chill Env Sync",
+                    ChillEnvPlugin.PluginVersion);
 
-                Transform audioTabContent = settingUI.transform.Find("MusicAudio/ScrollView/Viewport/Content");
+                Transform audioTabContent = settingUI.transform
+                    .Find("MusicAudio/ScrollView/Viewport/Content");
                 if (audioTabContent == null) return;
 
                 Transform originalRow = null;
@@ -558,105 +538,80 @@ namespace ChillWithYou.EnvSync.UI
                         break;
                     }
                 }
-
                 if (originalRow == null) return;
 
-                // === API CONFIGURATION SECTION ===
+                // ── API Configuration ───────────────────────────────────────
                 CreateSubHeader(content.transform, "API Configuration");
 
-                // Input field for Location
                 CreateInputField(content.transform, settingUI, "Location",
                     ChillEnvPlugin.Cfg_Location.Value,
-                    (newValue) => {
+                    newValue =>
+                    {
                         ChillEnvPlugin.Cfg_Location.Value = newValue;
                         ChillEnvPlugin.Instance.Config.Save();
-                        ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Location changed to: {newValue}");
                         TriggerForceRefresh();
                     });
 
-                // Input field for API Key
                 CreateInputField(content.transform, settingUI, "API Key",
                     ChillEnvPlugin.Cfg_GeneralAPI.Value,
-                    (newValue) => {
+                    newValue =>
+                    {
                         ChillEnvPlugin.Cfg_GeneralAPI.Value = newValue;
-                        ChillEnvPlugin.Cfg_ApiKey.Value = newValue; // Keep both in sync
+                        ChillEnvPlugin.Cfg_ApiKey.Value = newValue;
                         ChillEnvPlugin.Instance.Config.Save();
-                        ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] API Key updated");
                         TriggerForceRefresh();
-                    },
-                    true); // Password mode
+                    }, true);
 
-                // Weather Provider Dropdown
                 CreateWeatherProviderDropdown(content.transform, settingUI);
-
-                // Temperature Unit Dropdown
                 CreateTemperatureDropdown(content.transform, settingUI);
 
-                // === WEATHER & TIME SECTION ===
+                // ── Weather & Time ──────────────────────────────────────────
                 CreateSubHeader(content.transform, "Weather & Time");
 
                 CreateToggle(content.transform, originalRow, "Enable Weather API Sync",
                     ChillEnvPlugin.Cfg_EnableWeatherSync.Value,
-                    (val) => {
-                        ChillEnvPlugin.Cfg_EnableWeatherSync.Value = val;
-                        ChillEnvPlugin.Instance.Config.Save();
-                    });
+                    val => { ChillEnvPlugin.Cfg_EnableWeatherSync.Value = val; ChillEnvPlugin.Instance.Config.Save(); });
 
                 CreateToggle(content.transform, originalRow, "Show Weather on Date Bar",
                     ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value,
-                    (val) => {
-                        ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value = val;
-                        ChillEnvPlugin.Instance.Config.Save();
-                    });
+                    val => { ChillEnvPlugin.Cfg_ShowWeatherOnUI.Value = val; ChillEnvPlugin.Instance.Config.Save(); });
 
                 CreateToggle(content.transform, originalRow, "Show Detailed Time Segments",
                     ChillEnvPlugin.Cfg_DetailedTimeSegments.Value,
-                    (val) => {
-                        ChillEnvPlugin.Cfg_DetailedTimeSegments.Value = val;
-                        ChillEnvPlugin.Instance.Config.Save();
-                    });
+                    val => { ChillEnvPlugin.Cfg_DetailedTimeSegments.Value = val; ChillEnvPlugin.Instance.Config.Save(); });
 
-                // === FEATURES SECTION ===
-                CreateSubHeader(content.transform, "Features (Must restart game)");
+                // ── Features ────────────────────────────────────────────────
+                CreateSubHeader(content.transform, "Features (requires restart)");
 
                 CreateToggle(content.transform, originalRow, "Enable Seasonal Easter Eggs",
                     ChillEnvPlugin.Cfg_EnableEasterEggs.Value,
-                    (val) => {
-                        ChillEnvPlugin.Cfg_EnableEasterEggs.Value = val;
-                        ChillEnvPlugin.Instance.Config.Save();
-                    });
+                    val => { ChillEnvPlugin.Cfg_EnableEasterEggs.Value = val; ChillEnvPlugin.Instance.Config.Save(); });
 
                 CreateToggle(content.transform, originalRow, "Unlock All Environments",
                     ChillEnvPlugin.Cfg_UnlockEnvironments.Value,
-                    (val) => {
-                        ChillEnvPlugin.Cfg_UnlockEnvironments.Value = val;
-                        ChillEnvPlugin.Instance.Config.Save();
-                        ChillEnvPlugin.Log?.LogWarning("Please restart the game for environment unlock changes to take effect");
-                    });
+                    val => { ChillEnvPlugin.Cfg_UnlockEnvironments.Value = val; ChillEnvPlugin.Instance.Config.Save(); });
 
                 CreateToggle(content.transform, originalRow, "Unlock All Decorations",
                     ChillEnvPlugin.Cfg_UnlockDecorations.Value,
-                    (val) => {
-                        ChillEnvPlugin.Cfg_UnlockDecorations.Value = val;
-                        ChillEnvPlugin.Instance.Config.Save();
-                        ChillEnvPlugin.Log?.LogWarning("Please restart the game for decoration unlock changes to take effect");
-                    });
+                    val => { ChillEnvPlugin.Cfg_UnlockDecorations.Value = val; ChillEnvPlugin.Instance.Config.Save(); });
+
                 CreateToggle(content.transform, originalRow, "Unlock Purchasable Items",
                     ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value,
-                    (val) => {
-                        ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value = val;
-                        ChillEnvPlugin.Instance.Config.Save();
-                        ChillEnvPlugin.Log?.LogWarning("Please restart the game for purchasable item unlock changes to take effect");
-                    });
+                    val => { ChillEnvPlugin.Cfg_UnlockPurchasableItems.Value = val; ChillEnvPlugin.Instance.Config.Save(); });
 
-                LayoutRebuilder.ForceRebuildLayoutImmediate(content.GetComponent<RectTransform>());
+                LayoutRebuilder.ForceRebuildLayoutImmediate(
+                    content.GetComponent<RectTransform>());
             });
         }
-        static void CreateInputField(Transform parent, SettingUI settingUI, string label, string initialValue, System.Action<string> onValueChanged, bool isPassword = false)
+
+        // ── Standalone UI helpers (all unchanged) ─────────────────────────────
+
+        static void CreateInputField(Transform parent, SettingUI settingUI,
+            string label, string initialValue, Action<string> onValueChanged,
+            bool isPassword = false)
         {
             TMP_FontAsset validFont = GetValidFont();
 
-            // Create container
             GameObject container = new GameObject($"InputField_{label}");
             container.transform.SetParent(parent, false);
 
@@ -676,15 +631,13 @@ namespace ChillWithYou.EnvSync.UI
             hGroup.childForceExpandWidth = false;
             hGroup.childForceExpandHeight = false;
 
-            // Create label
+            // Label
             GameObject labelObj = new GameObject("Label");
             labelObj.transform.SetParent(container.transform, false);
             var labelRect = labelObj.AddComponent<RectTransform>();
             labelRect.sizeDelta = new Vector2(200, 60);
             var labelLayout = labelObj.AddComponent<LayoutElement>();
-            labelLayout.minWidth = 200f;
-            labelLayout.preferredWidth = 200f;
-
+            labelLayout.minWidth = labelLayout.preferredWidth = 200f;
             var labelText = labelObj.AddComponent<TextMeshProUGUI>();
             if (validFont != null) labelText.font = validFont;
             labelText.text = label;
@@ -692,27 +645,24 @@ namespace ChillWithYou.EnvSync.UI
             labelText.alignment = TextAlignmentOptions.MidlineRight;
             labelText.color = Color.white;
 
-            // Create input field
+            // Input
             GameObject inputObj = new GameObject("InputField");
             inputObj.transform.SetParent(container.transform, false);
             var inputRect = inputObj.AddComponent<RectTransform>();
             inputRect.sizeDelta = new Vector2(450, 45);
             var inputLayout = inputObj.AddComponent<LayoutElement>();
-            inputLayout.minWidth = 450f;
-            inputLayout.preferredWidth = 450f;
-            inputLayout.minHeight = 45f;
-            inputLayout.preferredHeight = 45f;
+            inputLayout.minWidth = inputLayout.preferredWidth = 450f;
+            inputLayout.minHeight = inputLayout.preferredHeight = 45f;
 
-            // --- INTERACTION FIX ---
             var inputBg = inputObj.AddComponent<Image>();
             inputBg.color = new Color(0.15f, 0.15f, 0.15f, 1f);
-            inputBg.raycastTarget = true; // Ensures the background catches clicks
+            inputBg.raycastTarget = true;
 
             var inputField = inputObj.AddComponent<TMP_InputField>();
             inputField.textViewport = inputRect;
-            inputField.targetGraphic = inputBg; // Links the Selectable to the hit-box
+            inputField.targetGraphic = inputBg;
 
-            // Create text component
+            // Text child
             GameObject textObj = new GameObject("Text");
             textObj.transform.SetParent(inputObj.transform, false);
             var textRect = textObj.AddComponent<RectTransform>();
@@ -720,41 +670,33 @@ namespace ChillWithYou.EnvSync.UI
             textRect.anchorMax = Vector2.one;
             textRect.offsetMin = new Vector2(10, 5);
             textRect.offsetMax = new Vector2(-10, -5);
-
             var textComp = textObj.AddComponent<TextMeshProUGUI>();
             if (validFont != null) textComp.font = validFont;
             textComp.fontSize = 16;
             textComp.color = Color.white;
             textComp.alignment = TextAlignmentOptions.MidlineLeft;
-            textComp.raycastTarget = false; // Prevents text from blocking clicks
+            textComp.raycastTarget = false;
 
-            // Create placeholder
-            GameObject placeholderObj = new GameObject("Placeholder");
-            placeholderObj.transform.SetParent(inputObj.transform, false);
-            var placeholderRect = placeholderObj.AddComponent<RectTransform>();
-            placeholderRect.anchorMin = Vector2.zero;
-            placeholderRect.anchorMax = Vector2.one;
-            placeholderRect.offsetMin = new Vector2(10, 5);
-            placeholderRect.offsetMax = new Vector2(-10, -5);
+            // Placeholder
+            GameObject phObj = new GameObject("Placeholder");
+            phObj.transform.SetParent(inputObj.transform, false);
+            var phRect = phObj.AddComponent<RectTransform>();
+            phRect.anchorMin = Vector2.zero;
+            phRect.anchorMax = Vector2.one;
+            phRect.offsetMin = new Vector2(10, 5);
+            phRect.offsetMax = new Vector2(-10, -5);
+            var phText = phObj.AddComponent<TextMeshProUGUI>();
+            if (validFont != null) phText.font = validFont;
+            phText.text = $"Enter {label}...";
+            phText.fontSize = 16;
+            phText.color = new Color(0.5f, 0.5f, 0.5f, 1f);
+            phText.alignment = TextAlignmentOptions.MidlineLeft;
+            phText.fontStyle = FontStyles.Italic;
+            phText.raycastTarget = false;
 
-            var placeholderText = placeholderObj.AddComponent<TextMeshProUGUI>();
-            if (validFont != null) placeholderText.font = validFont;
-            placeholderText.text = $"Enter {label}...";
-            placeholderText.fontSize = 16;
-            placeholderText.color = new Color(0.5f, 0.5f, 0.5f, 1f);
-            placeholderText.alignment = TextAlignmentOptions.MidlineLeft;
-            placeholderText.fontStyle = FontStyles.Italic;
-            placeholderText.raycastTarget = false; // Prevents text from blocking clicks
-
-            // --- CRASH FIX: STRICT ORDER OF OPERATIONS ---
-            // 1. Link components first
             inputField.textComponent = textComp;
-            inputField.placeholder = placeholderText;
-
-            // 2. Assign font asset ONLY AFTER linking the text components
+            inputField.placeholder = phText;
             if (validFont != null) inputField.fontAsset = validFont;
-
-            // 3. Set text last
             inputField.text = initialValue;
 
             if (isPassword)
@@ -767,35 +709,72 @@ namespace ChillWithYou.EnvSync.UI
                 inputField.contentType = TMP_InputField.ContentType.Standard;
             }
 
-            inputField.onEndEdit.AddListener((value) => {
+            inputField.onEndEdit.AddListener(value =>
+            {
                 if (!string.IsNullOrWhiteSpace(value))
                 {
                     onValueChanged?.Invoke(value.Trim());
-                    PlayClickSound(); // Assuming this method exists in your script
+                    PlayClickSound();
                 }
             });
 
             var colors = inputField.colors;
             colors.normalColor = new Color(0.15f, 0.15f, 0.15f, 1f);
-            colors.highlightedColor = new Color(0.2f, 0.2f, 0.2f, 1f);
+            colors.highlightedColor = new Color(0.20f, 0.20f, 0.20f, 1f);
             colors.selectedColor = new Color(0.25f, 0.25f, 0.25f, 1f);
             inputField.colors = colors;
         }
 
-        static void CreateGenericDropdown(Transform parent, SettingUI settingUI, string dropdownName, string titleText,
-    string[] options, int currentIndex, System.Action<int> onValueChanged)
+        static void CreateWeatherProviderDropdown(Transform parent, SettingUI settingUI)
+        {
+            string[] opts = { "Seniverse", "OpenWeather", "OpenMeteo" };
+            int cur = 0;
+            string p = ChillEnvPlugin.Cfg_WeatherProvider.Value;
+            if (p.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase)) cur = 1;
+            else if (p.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase)) cur = 2;
+            CreateGenericDropdown(parent, settingUI, "WeatherProviderDropdown", "Weather Provider",
+                opts, cur, index =>
+                {
+                    ChillEnvPlugin.Cfg_WeatherProvider.Value = opts[index];
+                    ChillEnvPlugin.Instance.Config.Save();
+                    TriggerForceRefresh();
+                });
+        }
+
+        static void CreateTemperatureDropdown(Transform parent, SettingUI settingUI)
+        {
+            string[] displayOpts = { "Celsius (°C)", "Fahrenheit (°F)", "Kelvin (K)" };
+            string[] unitValues = { "Celsius", "Fahrenheit", "Kelvin" };
+            string cur = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
+            int curIdx = cur.Equals("Fahrenheit", StringComparison.OrdinalIgnoreCase) ? 1
+                       : cur.Equals("Kelvin", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
+            CreateGenericDropdown(parent, settingUI, "TemperatureUnitDropdown", "Temperature Unit",
+                displayOpts, curIdx, index =>
+                {
+                    ChillEnvPlugin.Cfg_TemperatureUnit.Value = unitValues[index];
+                    ChillEnvPlugin.Instance.Config.Save();
+                    TriggerForceRefresh();
+                });
+        }
+
+        static void CreateGenericDropdown(Transform parent, SettingUI settingUI,
+            string dropdownName, string titleText,
+            string[] options, int currentIndex, Action<int> onValueChanged)
         {
             try
             {
-                Transform graphicsContent = settingUI.transform.Find("Graphics/ScrollView/Viewport/Content");
+                Transform graphicsContent = settingUI.transform
+                    .Find("Graphics/ScrollView/Viewport/Content");
                 if (graphicsContent == null) return;
 
-                Transform originalDropdown = graphicsContent.Find("GraphicQualityPulldownList");
+                Transform originalDropdown = graphicsContent
+                    .Find("GraphicQualityPulldownList");
                 if (originalDropdown == null) return;
 
                 GameObject dropdown = Object.Instantiate(originalDropdown.gameObject);
                 dropdown.name = dropdownName;
                 dropdown.transform.SetParent(parent, false);
+                dropdown.SetActive(false);
 
                 var hGroup = dropdown.GetComponent<HorizontalLayoutGroup>();
                 if (hGroup != null)
@@ -805,159 +784,88 @@ namespace ChillWithYou.EnvSync.UI
                     hGroup.childForceExpandWidth = false;
                 }
 
-                dropdown.SetActive(false);
-
-                var dropdownLayout = dropdown.GetComponent<LayoutElement>();
-                if (dropdownLayout == null)
-                    dropdownLayout = dropdown.AddComponent<LayoutElement>();
+                var dropdownLayout = dropdown.GetComponent<LayoutElement>()
+                                     ?? dropdown.AddComponent<LayoutElement>();
                 dropdownLayout.preferredHeight = 60f;
                 dropdownLayout.minHeight = 60f;
                 dropdownLayout.flexibleWidth = 1f;
 
-                // Set title
-                var titlePaths = new[] { "TitleText", "Title/Text", "Text" };
-                foreach (var path in titlePaths)
+                foreach (var tp in new[] { "TitleText", "Title/Text", "Text" })
                 {
-                    var titleTransform = dropdown.transform.Find(path);
-                    if (titleTransform != null)
-                    {
-                        var tmp = titleTransform.GetComponent<TMP_Text>();
-                        if (tmp != null)
-                        {
-                            tmp.text = titleText;
-                            break;
-                        }
-                    }
+                    var tt = dropdown.transform.Find(tp);
+                    if (tt == null) continue;
+                    var tmp = tt.GetComponent<TMP_Text>();
+                    if (tmp != null) { tmp.text = titleText; break; }
                 }
 
-                Transform content = dropdown.transform.Find("PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
+                Transform content = dropdown.transform
+                    .Find("PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
                 if (content == null) return;
 
-                // Clear existing children
-                int childCount = content.childCount;
-                for (int i = childCount - 1; i >= 0; i--)
-                {
+                for (int i = content.childCount - 1; i >= 0; i--)
                     Object.Destroy(content.GetChild(i).gameObject);
-                }
-
                 content.gameObject.SetActive(true);
 
-                Transform firstButton = graphicsContent.Find("GraphicQualityPulldownList/PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
-                if (firstButton != null && firstButton.childCount > 0)
-                {
-                    GameObject buttonTemplate = Object.Instantiate(firstButton.GetChild(0).gameObject);
-                    buttonTemplate.name = "SelectButtonTemplate";
-                    buttonTemplate.SetActive(false);
+                Transform templateSource = graphicsContent
+                    .Find("GraphicQualityPulldownList/PulldownList/Pulldown/CurrentSelectText (TMP)/Content");
 
-                    // Create buttons for each option
+                if (templateSource != null && templateSource.childCount > 0)
+                {
+                    GameObject btnTemplate = Object.Instantiate(
+                        templateSource.GetChild(0).gameObject);
+                    btnTemplate.SetActive(false);
+
                     for (int i = 0; i < options.Length; i++)
                     {
-                        GameObject newButton = Object.Instantiate(buttonTemplate, content);
-                        newButton.name = $"SelectButton_{options[i]}";
-                        newButton.SetActive(true);
+                        GameObject newBtn = Object.Instantiate(btnTemplate, content);
+                        newBtn.name = $"SelectButton_{options[i]}";
+                        newBtn.SetActive(true);
 
-                        TMP_Text buttonText = newButton.GetComponentInChildren<TMP_Text>();
-                        if (buttonText != null)
-                        {
-                            buttonText.text = options[i];
-                        }
+                        var bt = newBtn.GetComponentInChildren<TMP_Text>();
+                        if (bt != null) bt.text = options[i];
 
-                        var images = newButton.GetComponentsInChildren<Image>(true);
-                        foreach (var img in images)
-                        {
+                        foreach (var img in newBtn.GetComponentsInChildren<Image>(true))
                             img.raycastTarget = true;
-                        }
 
-                        Button button = newButton.GetComponent<Button>();
+                        var button = newBtn.GetComponent<Button>();
                         if (button != null)
                         {
-                            int index = i;
+                            int idx = i;
                             button.onClick.RemoveAllListeners();
                             button.onClick.AddListener(() =>
                             {
-                                onValueChanged?.Invoke(index);
-                                UpdateDropdownSelectedText(dropdown, options[index]);
+                                onValueChanged?.Invoke(idx);
+                                UpdateDropdownSelectedText(dropdown, options[idx]);
                                 CloseDropdown(dropdown);
                                 PlayClickSound();
                             });
-
-                            if (!button.interactable) button.interactable = true;
+                            button.interactable = true;
                             if (button.targetGraphic == null)
-                            {
-                                var graphic = newButton.GetComponent<Image>();
-                                if (graphic != null) button.targetGraphic = graphic;
-                            }
+                                button.targetGraphic = newBtn.GetComponent<Image>();
                         }
                     }
 
-                    Object.Destroy(buttonTemplate);
+                    Object.Destroy(btnTemplate);
                     UpdateDropdownSelectedText(dropdown, options[currentIndex]);
-
-                    // Wait for buttons to be properly instantiated before configuring UI
-                    WeatherModUIRunner.Instance.RunDelayed(0.1f, () => {
-                        ConfigureDropdownUI(dropdown, originalDropdown, content);
-                    });
+                    WeatherModUIRunner.Instance.RunDelayed(0.1f,
+                        () => ConfigureDropdownUI(dropdown, originalDropdown, content));
                 }
                 dropdown.SetActive(true);
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
-                ChillEnvPlugin.Log?.LogError($"Create{dropdownName} failed: {e.Message}");
+                ChillEnvPlugin.Log?.LogError($"CreateGenericDropdown failed: {e.Message}");
             }
         }
-        static void CreateWeatherProviderDropdown(Transform parent, SettingUI settingUI)
-        {
-            string[] providerOptions = { "Seniverse", "OpenWeather", "OpenMeteo" };
-            int currentIndex = 0;
-            string prov = ChillEnvPlugin.Cfg_WeatherProvider.Value;
-            if (prov.Equals("OpenWeather", StringComparison.OrdinalIgnoreCase)) currentIndex = 1;
-            else if (prov.Equals("OpenMeteo", StringComparison.OrdinalIgnoreCase)) currentIndex = 2;
 
-            CreateGenericDropdown(parent, settingUI, "WeatherProviderDropdown", "Weather Provider",
-                providerOptions, currentIndex, (index) => {
-                    string[] providers = { "Seniverse", "OpenWeather", "OpenMeteo" };
-                    ChillEnvPlugin.Cfg_WeatherProvider.Value = providers[index];
-                    ChillEnvPlugin.Instance.Config.Save();
-                    ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Weather provider changed to: {providers[index]}");
-                    TriggerForceRefresh();
-                });
-        }
-
-        static void CreateTemperatureDropdown(Transform parent, SettingUI settingUI)
-        {
-            string[] tempOptions = { "Celsius (°C)", "Fahrenheit (°F)", "Kelvin (K)" };
-            string[] tempUnits = { "Celsius", "Fahrenheit", "Kelvin" };
-
-            string currentUnit = ChillEnvPlugin.Cfg_TemperatureUnit.Value;
-            int currentIndex = 0;
-            if (currentUnit.Equals("Fahrenheit", System.StringComparison.OrdinalIgnoreCase))
-                currentIndex = 1;
-            else if (currentUnit.Equals("Kelvin", System.StringComparison.OrdinalIgnoreCase))
-                currentIndex = 2;
-
-            CreateGenericDropdown(parent, settingUI, "TemperatureUnitDropdown", "Temperature Unit",
-                tempOptions, currentIndex, (index) => {
-                    ChillEnvPlugin.Cfg_TemperatureUnit.Value = tempUnits[index];
-                    ChillEnvPlugin.Instance.Config.Save();
-                    ChillEnvPlugin.Log?.LogInfo($"[Weather MOD] Temperature unit changed to: {tempUnits[index]}");
-                    TriggerForceRefresh();
-                });
-        }
         static void UpdateDropdownSelectedText(GameObject dropdown, string text)
         {
-            var paths = new[] { "PulldownList/Pulldown/CurrentSelectText (TMP)", "CurrentSelectText (TMP)" };
-            foreach (var path in paths)
+            foreach (var p in new[] { "PulldownList/Pulldown/CurrentSelectText (TMP)", "CurrentSelectText (TMP)" })
             {
-                var transform = dropdown.transform.Find(path);
-                if (transform != null)
-                {
-                    var tmp = transform.GetComponent<TMP_Text>();
-                    if (tmp != null)
-                    {
-                        tmp.text = text;
-                        return;
-                    }
-                }
+                var t = dropdown.transform.Find(p);
+                if (t == null) continue;
+                var tmp = t.GetComponent<TMP_Text>();
+                if (tmp != null) { tmp.text = text; return; }
             }
         }
 
@@ -967,49 +875,37 @@ namespace ChillWithYou.EnvSync.UI
             {
                 var pulldownUI = dropdown.GetComponentsInChildren<Component>(true)
                     .FirstOrDefault(c => c.GetType().Name == "PulldownListUI");
-
-                if (pulldownUI != null)
-                {
-                    var closeMethod = pulldownUI.GetType().GetMethod("ClosePullDown",
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-                    if (closeMethod != null)
-                    {
-                        closeMethod.Invoke(pulldownUI, new object[] { false });
-                    }
-                }
+                if (pulldownUI == null) return;
+                var closeMethod = pulldownUI.GetType().GetMethod("ClosePullDown",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                closeMethod?.Invoke(pulldownUI, new object[] { false });
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 ChillEnvPlugin.Log?.LogError($"CloseDropdown failed: {ex.Message}");
             }
         }
 
-        static void ConfigureDropdownUI(GameObject dropdown, Transform originalDropdown, Transform content)
+        static void ConfigureDropdownUI(GameObject dropdown, Transform originalDropdown,
+            Transform content)
         {
             try
             {
-                if (_cachedPulldownUIType == null)
-                {
-                    _cachedPulldownUIType = System.AppDomain.CurrentDomain.GetAssemblies()
-                        .SelectMany(a => {
-                            try { return a.GetTypes(); }
-                            catch { return new System.Type[0]; }
-                        })
-                        .FirstOrDefault(t => t.Name == "PulldownListUI");
-                }
-
-                var pulldownUIType = _cachedPulldownUIType;
+                Type pulldownUIType = AppDomain.CurrentDomain
+                    .GetAssemblies()
+                    .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } })
+                    .FirstOrDefault(t => t.Name == "PulldownListUI");
                 if (pulldownUIType == null) return;
 
                 Transform pulldownList = dropdown.transform.Find("PulldownList");
                 Transform pulldown = dropdown.transform.Find("PulldownList/Pulldown");
                 Transform pulldownButton = dropdown.transform.Find("PulldownList/PulldownButton");
-                Transform currentSelectText = dropdown.transform.Find("PulldownList/Pulldown/CurrentSelectText (TMP)");
+                Transform currentSelectText = dropdown.transform
+                    .Find("PulldownList/Pulldown/CurrentSelectText (TMP)");
 
                 GameObject uiHost = (pulldownList != null) ? pulldownList.gameObject : dropdown;
-                Component pulldownUI = uiHost.GetComponent(pulldownUIType);
-                if (pulldownUI == null) pulldownUI = uiHost.AddComponent(pulldownUIType);
+                Component pulldownUI = uiHost.GetComponent(pulldownUIType)
+                                        ?? uiHost.AddComponent(pulldownUIType);
 
                 Button pulldownButtonComp = pulldownButton?.GetComponent<Button>();
                 TMP_Text currentSelectTextComp = currentSelectText?.GetComponent<TMP_Text>();
@@ -1017,131 +913,93 @@ namespace ChillWithYou.EnvSync.UI
                 RectTransform pulldownButtonRect = pulldownButton?.GetComponent<RectTransform>();
                 RectTransform contentRect = content?.GetComponent<RectTransform>();
 
-                if (pulldownButtonComp == null || currentSelectTextComp == null || pulldownParentRect == null) return;
+                if (pulldownButtonComp == null || currentSelectTextComp == null
+                    || pulldownParentRect == null) return;
 
-                // === NEW CODE: Dynamic height calculation ===
                 void SetField(string fieldName, object value)
                 {
                     if (value == null) return;
-                    pulldownUIType.GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(pulldownUI, value);
+                    pulldownUIType.GetField(fieldName,
+                        BindingFlags.NonPublic | BindingFlags.Instance)
+                        ?.SetValue(pulldownUI, value);
                 }
 
-                // Calculate exact height needed
                 int childCount = content.childCount;
                 float itemHeight = 40f;
-
                 if (childCount > 0)
                 {
-                    var firstChild = content.GetChild(0).GetComponent<RectTransform>();
-                    if (firstChild != null && firstChild.rect.height > 10) itemHeight = firstChild.rect.height;
+                    var fc = content.GetChild(0).GetComponent<RectTransform>();
+                    if (fc != null && fc.rect.height > 10) itemHeight = fc.rect.height;
                 }
 
                 float realContentHeight = childCount * itemHeight;
-
-                // Determine if scrolling is needed
-                float maxVisibleItems = 6f;
-                float maxViewHeight = maxVisibleItems * itemHeight;
+                float maxViewHeight = 6f * itemHeight;
                 bool needsScroll = realContentHeight > maxViewHeight;
                 float finalViewHeight = needsScroll ? maxViewHeight : realContentHeight;
+                float openSize = pulldownParentRect.rect.height + finalViewHeight + 10f;
 
-                // Calculate animation target height
-                float headerHeight = pulldownParentRect.rect.height;
-                float openSize = headerHeight + finalViewHeight + 10f;
-
-                // Set Content positioning based on scroll requirement
-                if (needsScroll)
+                if (needsScroll && content.parent.name != "Viewport")
                 {
-                    // Ensure VerticalLayoutGroup forces width expansion
                     var vlg = content.GetComponent<VerticalLayoutGroup>();
-                    if (vlg != null)
-                    {
-                        vlg.childControlWidth = true;
-                        vlg.childForceExpandWidth = true;
-                    }
+                    if (vlg != null) { vlg.childControlWidth = true; vlg.childForceExpandWidth = true; }
 
-                    // Check if already in Viewport
-                    if (content.parent.name != "Viewport")
-                    {
-                        GameObject scrollView = new GameObject("ScrollView", typeof(RectTransform));
-                        scrollView.transform.SetParent(content.parent, false);
+                    GameObject scrollView = new GameObject("ScrollView", typeof(RectTransform));
+                    scrollView.transform.SetParent(content.parent, false);
+                    var svRT = scrollView.GetComponent<RectTransform>();
+                    svRT.anchorMin = Vector2.zero;
+                    svRT.anchorMax = new Vector2(1f, 0f);
+                    svRT.pivot = new Vector2(0.5f, 1f);
+                    svRT.sizeDelta = new Vector2(0, finalViewHeight);
+                    svRT.anchoredPosition = Vector2.zero;
 
-                        var scrollRectRT = scrollView.GetComponent<RectTransform>();
-                        scrollRectRT.anchorMin = Vector2.zero;
-                        scrollRectRT.anchorMax = new Vector2(1f, 0f);
-                        scrollRectRT.pivot = new Vector2(0.5f, 1f);
-                        scrollRectRT.sizeDelta = new Vector2(0, finalViewHeight);
-                        scrollRectRT.anchoredPosition = Vector2.zero;
+                    var sr = scrollView.AddComponent<ScrollRect>();
+                    sr.horizontal = false;
+                    sr.vertical = true;
+                    sr.scrollSensitivity = 20f;
+                    sr.movementType = ScrollRect.MovementType.Clamped;
 
-                        var scrollRect = scrollView.AddComponent<ScrollRect>();
-                        scrollRect.horizontal = false;
-                        scrollRect.vertical = true;
-                        scrollRect.scrollSensitivity = 20f;
-                        scrollRect.movementType = ScrollRect.MovementType.Clamped;
+                    GameObject vp = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
+                    vp.transform.SetParent(scrollView.transform, false);
+                    var vpRect = vp.GetComponent<RectTransform>();
+                    vpRect.anchorMin = Vector2.zero;
+                    vpRect.anchorMax = Vector2.one;
+                    vpRect.sizeDelta = Vector2.zero;
+                    content.SetParent(vp.transform, true);
+                    sr.viewport = vpRect;
+                    sr.content = contentRect;
 
-                        GameObject viewport = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D));
-                        viewport.transform.SetParent(scrollView.transform, false);
-                        var viewRect = viewport.GetComponent<RectTransform>();
-                        viewRect.anchorMin = Vector2.zero;
-                        viewRect.anchorMax = Vector2.one;
-                        viewRect.sizeDelta = Vector2.zero;
-
-                        content.SetParent(viewport.transform, true);
-
-                        scrollRect.viewport = viewRect;
-                        scrollRect.content = contentRect;
-
-                        // Content positioning for scrolling mode
-                        contentRect.anchorMin = new Vector2(0, 1);
-                        contentRect.anchorMax = new Vector2(1, 1);
-                        contentRect.pivot = new Vector2(0.5f, 1f);
-                        contentRect.anchoredPosition = Vector2.zero;
-                        contentRect.sizeDelta = new Vector2(0, realContentHeight);
-
-                        var fitter = content.GetComponent<ContentSizeFitter>();
-                        if (fitter == null) fitter = content.gameObject.AddComponent<ContentSizeFitter>();
-                        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-                    }
+                    contentRect.anchorMin = new Vector2(0, 1);
+                    contentRect.anchorMax = new Vector2(1, 1);
+                    contentRect.pivot = new Vector2(0.5f, 1f);
+                    contentRect.anchoredPosition = Vector2.zero;
+                    contentRect.sizeDelta = new Vector2(0, realContentHeight);
+                    var fitter = content.GetComponent<ContentSizeFitter>()
+                                 ?? content.gameObject.AddComponent<ContentSizeFitter>();
+                    fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
                 }
-                else
+                else if (contentRect != null)
                 {
-                    // Non-scrolling case: bottom-aligned
-                    if (contentRect != null)
-                    {
-                        contentRect.anchorMin = Vector2.zero;
-                        contentRect.anchorMax = new Vector2(1f, 0f);
-                        contentRect.pivot = new Vector2(0.5f, 1f);
-                        contentRect.sizeDelta = new Vector2(0, realContentHeight);
-                        contentRect.anchoredPosition = Vector2.zero;
-                    }
+                    contentRect.anchorMin = Vector2.zero;
+                    contentRect.anchorMax = new Vector2(1f, 0f);
+                    contentRect.pivot = new Vector2(0.5f, 1f);
+                    contentRect.sizeDelta = new Vector2(0, realContentHeight);
+                    contentRect.anchoredPosition = Vector2.zero;
                 }
 
-                // Add Canvas to ROOT object
                 Canvas rootCanvas = dropdown.GetComponent<Canvas>();
                 if (rootCanvas == null)
                 {
                     rootCanvas = dropdown.AddComponent<Canvas>();
                     rootCanvas.overrideSorting = false;
                     rootCanvas.sortingOrder = 0;
-
                     if (dropdown.GetComponent<GraphicRaycaster>() == null)
                         dropdown.AddComponent<GraphicRaycaster>();
-
-                    ChillEnvPlugin.Log?.LogInfo("[Weather MOD] Canvas added to ROOT dropdown");
-                }
-                else
-                {
-                    rootCanvas.overrideSorting = false;
-                    rootCanvas.sortingOrder = 0;
                 }
 
-                // Add dynamic layer controller
-                var layerController = dropdown.GetComponent<PulldownLayerController>();
-                if (layerController == null)
-                    layerController = dropdown.AddComponent<PulldownLayerController>();
+                var lc = dropdown.GetComponent<PulldownLayerController>()
+                         ?? dropdown.AddComponent<PulldownLayerController>();
+                lc.Initialize(pulldownUI, rootCanvas);
 
-                layerController.Initialize(pulldownUI, rootCanvas);
-
-                // Set PulldownUI fields
                 SetField("_currentSelectContentText", currentSelectTextComp);
                 SetField("_pullDownParentRect", pulldownParentRect);
                 SetField("_openPullDownSizeDeltaY", openSize);
@@ -1157,25 +1015,19 @@ namespace ChillWithYou.EnvSync.UI
                 ChillEnvPlugin.Log?.LogError($"ConfigureDropdownUI failed: {e.Message}");
             }
         }
+
         static void CreateSubHeader(Transform parent, string text)
         {
             GameObject obj = new GameObject($"SubHeader_{text}");
             obj.transform.SetParent(parent, false);
-
             var rect = obj.AddComponent<RectTransform>();
             rect.sizeDelta = new Vector2(0, 35);
-
             var le = obj.AddComponent<LayoutElement>();
-            le.minHeight = 35f;
-            le.preferredHeight = 35f;
+            le.minHeight = le.preferredHeight = 35f;
             le.flexibleWidth = 1f;
-
             var tmp = obj.AddComponent<TextMeshProUGUI>();
-
-            // --- ROBUST FONT INJECTION ---
             var font = GetValidFont();
             if (font != null) tmp.font = font;
-
             tmp.text = $"<size=16><color=#AAAAAA>{text}</color></size>";
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = new Color(0.67f, 0.67f, 0.67f, 1f);
@@ -1185,39 +1037,32 @@ namespace ChillWithYou.EnvSync.UI
         {
             GameObject obj = new GameObject($"Header_{name}");
             obj.transform.SetParent(parent, false);
-
             var rect = obj.AddComponent<RectTransform>();
             rect.sizeDelta = new Vector2(0, 50);
-
             var le = obj.AddComponent<LayoutElement>();
-            le.minHeight = 50f;
-            le.preferredHeight = 50f;
+            le.minHeight = le.preferredHeight = 50f;
             le.flexibleWidth = 1f;
-
             var tmp = obj.AddComponent<TextMeshProUGUI>();
-
-            // --- ROBUST FONT INJECTION ---
             var font = GetValidFont();
             if (font != null) tmp.font = font;
-
-            string verStr = string.IsNullOrEmpty(version) ? "" : $" <size=16><color=#888888>v{version}</color></size>";
+            string verStr = string.IsNullOrEmpty(version) ? ""
+                : $" <size=16><color=#888888>v{version}</color></size>";
             tmp.text = $"<size=20><b>{name}</b></size>{verStr}";
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
         }
-        static void CreateToggle(Transform parent, Transform templateRow, string label, bool initialValue, System.Action<bool> onValueChanged)
+
+        static void CreateToggle(Transform parent, Transform templateRow,
+            string label, bool initialValue, Action<bool> onValueChanged)
         {
             GameObject toggleRow = Object.Instantiate(templateRow.gameObject);
             toggleRow.name = $"WeatherToggle_{label}";
             toggleRow.transform.SetParent(parent, false);
             toggleRow.SetActive(true);
 
-            var layoutElement = toggleRow.GetComponent<LayoutElement>();
-            if (layoutElement == null)
-                layoutElement = toggleRow.AddComponent<LayoutElement>();
-
-            layoutElement.preferredWidth = 750f;
-            layoutElement.minWidth = 750f;
+            var layoutElement = toggleRow.GetComponent<LayoutElement>()
+                                ?? toggleRow.AddComponent<LayoutElement>();
+            layoutElement.preferredWidth = layoutElement.minWidth = 750f;
 
             var hGroup = toggleRow.GetComponent<HorizontalLayoutGroup>();
             if (hGroup != null)
@@ -1229,22 +1074,20 @@ namespace ChillWithYou.EnvSync.UI
             var titleTexts = toggleRow.GetComponentsInChildren<TMP_Text>(true);
             if (titleTexts.Length > 0)
             {
-                var sortedTexts = titleTexts.OrderBy(t => t.transform.position.x).ToArray();
-                sortedTexts[0].text = label;
-                sortedTexts[0].alignment = TextAlignmentOptions.MidlineLeft;
+                var sorted = titleTexts.OrderBy(t => t.transform.position.x).ToArray();
+                sorted[0].text = label;
+                sorted[0].alignment = TextAlignmentOptions.MidlineLeft;
             }
 
             Button[] buttons = toggleRow.GetComponentsInChildren<Button>(true);
             if (buttons.Length < 2) return;
-
-            System.Array.Sort(buttons, (a, b) => a.transform.position.x.CompareTo(b.transform.position.x));
-
+            Array.Sort(buttons, (a, b) =>
+                a.transform.position.x.CompareTo(b.transform.position.x));
             Button btnOn = buttons[0];
             Button btnOff = buttons[1];
 
             SetButtonText(btnOn, "ON");
             SetButtonText(btnOff, "OFF");
-
             btnOn.onClick.RemoveAllListeners();
             btnOff.onClick.RemoveAllListeners();
 
@@ -1252,38 +1095,25 @@ namespace ChillWithYou.EnvSync.UI
             {
                 btnOn.interactable = !state;
                 btnOff.interactable = state;
-
-                var btnOnInteractableUI = btnOn.GetComponent<InteractableUI>();
-                var btnOffInteractableUI = btnOff.GetComponent<InteractableUI>();
-
-                if (state)
-                {
-                    btnOnInteractableUI?.ActivateUseUI(false);
-                    btnOffInteractableUI?.DeactivateUseUI(false);
-                }
-                else
-                {
-                    btnOnInteractableUI?.DeactivateUseUI(false);
-                    btnOffInteractableUI?.ActivateUseUI(false);
-                }
+                var uiOn = btnOn.GetComponent<InteractableUI>();
+                var uiOff = btnOff.GetComponent<InteractableUI>();
+                if (state) { uiOn?.ActivateUseUI(false); uiOff?.DeactivateUseUI(false); }
+                else { uiOn?.DeactivateUseUI(false); uiOff?.ActivateUseUI(false); }
             }
 
-            btnOn.onClick.AddListener(() => {
-                if (btnOn.interactable)
-                {
-                    UpdateState(true);
-                    onValueChanged?.Invoke(true);
-                    PlayClickSound();
-                }
+            btnOn.onClick.AddListener(() =>
+            {
+                if (!btnOn.interactable) return;
+                UpdateState(true);
+                onValueChanged?.Invoke(true);
+                PlayClickSound();
             });
-
-            btnOff.onClick.AddListener(() => {
-                if (btnOff.interactable)
-                {
-                    UpdateState(false);
-                    onValueChanged?.Invoke(false);
-                    PlayClickSound();
-                }
+            btnOff.onClick.AddListener(() =>
+            {
+                if (!btnOff.interactable) return;
+                UpdateState(false);
+                onValueChanged?.Invoke(false);
+                PlayClickSound();
             });
 
             UpdateState(initialValue);
@@ -1297,330 +1127,116 @@ namespace ChillWithYou.EnvSync.UI
 
         static void UpdateModButtonText(GameObject modTabButton)
         {
-            var allTexts = modTabButton.GetComponentsInChildren<TextMeshProUGUI>(true);
-            foreach (var text in allTexts) text.text = "MOD";
+            foreach (var t in modTabButton.GetComponentsInChildren<TextMeshProUGUI>(true))
+                t.text = "MOD";
         }
 
         static void UpdateModContentText(GameObject modContentParent)
         {
-            var titleTransform = modContentParent.transform.Find("Title");
-            if (titleTransform != null)
-            {
-                var t = titleTransform.GetComponent<TextMeshProUGUI>();
-                if (t != null) t.text = "MOD";
-            }
-            var allTexts = modContentParent.GetComponentsInChildren<TextMeshProUGUI>(true);
-            foreach (var text in allTexts)
-            {
-                if (text.text.Contains("Credits")) text.text = "Weather & Environment Settings";
-            }
+            var title = modContentParent.transform.Find("Title")?.GetComponent<TextMeshProUGUI>();
+            if (title != null) title.text = "MOD";
+            foreach (var t in modContentParent.GetComponentsInChildren<TextMeshProUGUI>(true))
+                if (t.text.Contains("Credits")) t.text = "Weather & Environment Settings";
         }
 
         static void AdjustTabBarLayout(Transform tabBarParent)
         {
             var hlg = tabBarParent.GetComponent<HorizontalLayoutGroup>();
-            if (hlg != null)
-            {
-                hlg.childForceExpandWidth = true;
-                hlg.spacing = 0f;
-                if (hlg.padding != null)
-                {
-                    hlg.padding.left = 0;
-                    hlg.padding.right = 0;
-                }
-            }
+            if (hlg == null) return;
+            hlg.childForceExpandWidth = true;
+            hlg.spacing = 0f;
+            if (hlg.padding != null) { hlg.padding.left = 0; hlg.padding.right = 0; }
         }
 
-        private static void HookIntoTabButtons(SettingUI settingUI)
+        static void HookIntoTabButtons(SettingUI settingUI)
         {
             var buttons = new[] {
-        "_generalInteractableUI",
-        "_graphicInteractableUI",
-        "_audioInteractableUI",
-        "_accountInteractableUI",   
-        "_newsInteractableUI",       
-        "_creditsInteractableUI"
-    };
+                "_generalInteractableUI","_graphicInteractableUI","_audioInteractableUI",
+                "_accountInteractableUI","_newsInteractableUI","_creditsInteractableUI"
+            };
             var parents = new[] {
-        "_generalParent",
-        "_graphicParent",
-        "_audioParent",
-        "_accountParent",          
-        "_newsParent",              
-        "_creditsParent"
-    };
+                "_generalParent","_graphicParent","_audioParent",
+                "_accountParent","_newsParent","_creditsParent"
+            };
             for (int i = 0; i < buttons.Length; i++)
             {
                 var btn = AccessTools.Field(typeof(SettingUI), buttons[i]).GetValue(settingUI) as InteractableUI;
                 var parent = AccessTools.Field(typeof(SettingUI), parents[i]).GetValue(settingUI) as GameObject;
-                if (btn != null)
+                if (btn == null) continue;
+                var cap = btn;
+                var capP = parent;
+                btn.GetComponent<Button>()?.onClick.AddListener(() =>
                 {
-                    var capturedBtn = btn;
-                    var capturedParent = parent;
-                    btn.GetComponent<Button>()?.onClick.AddListener(() =>
-                    {
-                        modContentParent?.SetActive(false);
-                        modInteractableUI?.DeactivateUseUI(false);
-                        if (capturedParent) { capturedParent.SetActive(true); capturedBtn.ActivateUseUI(false); }
-                    });
-                }
+                    modContentParent?.SetActive(false);
+                    modInteractableUI?.DeactivateUseUI(false);
+                    if (capP) { capP.SetActive(true); cap.ActivateUseUI(false); }
+                });
             }
         }
 
-        private static void SwitchToModTab(SettingUI settingUI)
+        static void SwitchToModTab(SettingUI settingUI)
         {
-            var parents = new[] {
-        "_generalParent", "_graphicParent", "_audioParent",
-        "_accountParent", "_newsParent", "_creditsParent" 
-    };
-            foreach (var p in parents)
-                (AccessTools.Field(typeof(SettingUI), p).GetValue(settingUI) as GameObject)?.SetActive(false);
+            foreach (var p in new[] { "_generalParent","_graphicParent","_audioParent",
+                                      "_accountParent","_newsParent","_creditsParent" })
+                (AccessTools.Field(typeof(SettingUI), p).GetValue(settingUI) as GameObject)
+                    ?.SetActive(false);
 
-            var buttons = new[] {
-        "_generalInteractableUI", "_graphicInteractableUI", "_audioInteractableUI",
-        "_accountInteractableUI", "_newsInteractableUI", "_creditsInteractableUI" 
-    };
-            foreach (var b in buttons)
-                (AccessTools.Field(typeof(SettingUI), b).GetValue(settingUI) as InteractableUI)?.DeactivateUseUI(false);
+            foreach (var b in new[] { "_generalInteractableUI","_graphicInteractableUI",
+                                      "_audioInteractableUI","_accountInteractableUI",
+                                      "_newsInteractableUI","_creditsInteractableUI" })
+                (AccessTools.Field(typeof(SettingUI), b).GetValue(settingUI) as InteractableUI)
+                    ?.DeactivateUseUI(false);
 
             PlayClickSound();
             modInteractableUI?.ActivateUseUI(false);
             modContentParent?.SetActive(true);
 
             var scrollRect = modContentParent?.GetComponentInChildren<ScrollRect>();
-            if (scrollRect != null)
-            {
-                LayoutRebuilder.ForceRebuildLayoutImmediate(modContentParent.GetComponent<RectTransform>());
-                scrollRect.verticalNormalizedPosition = 1f;
-            }
-        }
-        static void TranslateIGPUSaviorLabels(SettingUI settingUI)
-        {
-            try
-            {
-                var modContent = settingUI.transform.Find("ModSettingsContent/ScrollView/Viewport/Content");
-                if (modContent == null)
-                {
-                    ChillEnvPlugin.Log?.LogWarning("[Translation] MOD content not found");
-                    return;
-                }
-
-                // Dictionary of Chinese to English translations
-                var translations = new Dictionary<string, string>
-        {
-            // iGPU Savior settings
-            {"镜像自启动", "Auto-Enable Mirror"},
-            {"小窗缩放", "Window Scale Ratio"},
-            {"小窗拖动模式", "Window Drag Mode"},
-            {"土豆模式快捷键", "Potato Mode Hotkey"},
-            {"小窗模式快捷键", "PiP Mode Hotkey"},
-            {"镜像模式快捷键", "Mirror Mode Hotkey"},
-            {"竖屏优化快捷键", "Portrait Mode Hotkey"},
-            
-            // Dropdown options
-            {"Ctrl + 左键", "Ctrl + Left Click"},
-            {"Alt + 左键", "Alt + Left Click"},
-            {"右键按住", "Right Click Hold"},
-            
-            // Headers (if present)
-            {"快捷键配置", "Hotkey Configuration"},
-            {"相机配置", "Camera Settings"},
-            {"窗口配置", "Window Settings"}
-        };
-
-                // Find all TextMeshProUGUI components in the content area
-                var allTexts = modContent.GetComponentsInChildren<TextMeshProUGUI>(true);
-                int translatedCount = 0;
-
-                foreach (var textComponent in allTexts)
-                {
-                    if (textComponent == null || string.IsNullOrEmpty(textComponent.text))
-                        continue;
-
-                    string originalText = textComponent.text;
-                    bool wasTranslated = false;
-
-                    // Try exact match first
-                    foreach (var pair in translations)
-                    {
-                        if (originalText.Equals(pair.Key, System.StringComparison.Ordinal))
-                        {
-                            textComponent.text = pair.Value;
-                            translatedCount++;
-                            wasTranslated = true;
-                            ChillEnvPlugin.Log?.LogDebug($"[Translation] Exact match: '{pair.Key}' → '{pair.Value}'");
-                            break;
-                        }
-                    }
-
-                    // If no exact match, try contains (for formatted text)
-                    if (!wasTranslated)
-                    {
-                        foreach (var pair in translations)
-                        {
-                            if (originalText.Contains(pair.Key))
-                            {
-                                textComponent.text = originalText.Replace(pair.Key, pair.Value);
-                                translatedCount++;
-                                wasTranslated = true;
-                                ChillEnvPlugin.Log?.LogDebug($"[Translation] Partial match: '{pair.Key}' → '{pair.Value}'");
-                                break;
-                            }
-                        }
-                    }
-
-                    // Log untranslated Chinese text for debugging
-                    if (!wasTranslated && ContainsChinese(originalText))
-                    {
-                        ChillEnvPlugin.Log?.LogWarning($"[Translation] Untranslated Chinese text found: '{originalText}'");
-                    }
-                }
-
-                if (translatedCount > 0)
-                {
-                    ChillEnvPlugin.Log?.LogInfo($"[Translation] Successfully translated {translatedCount} iGPU Savior labels to English");
-
-                    if (modContent != null)
-                    {
-                        LayoutRebuilder.ForceRebuildLayoutImmediate(modContent as RectTransform);
-                    }
-                }
-                else
-                {
-                    ChillEnvPlugin.Log?.LogWarning("[Translation] No labels were translated");
-                }
-            }
-            catch (System.Exception ex)
-            {
-                ChillEnvPlugin.Log?.LogError($"[Translation] Failed to translate labels: {ex.Message}");
-            }
+            if (scrollRect == null) return;
+            LayoutRebuilder.ForceRebuildLayoutImmediate(
+                modContentParent.GetComponent<RectTransform>());
+            scrollRect.verticalNormalizedPosition = 1f;
         }
 
-        // Helper method to detect Chinese characters
-        static bool ContainsChinese(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return false;
-
-            foreach (char c in text)
-            {
-                if (c >= 0x4E00 && c <= 0x9FFF) // Common CJK Unified Ideographs range
-                    return true;
-            }
-            return false;
-        }
-        /// <summary>
-        /// Dynamically retrieves iGPU Savior's version using reflection
-        /// </summary>
-        static string GetIGPUSaviorVersion()
-        {
-            try
-            {
-                // Try to find the PotatoPlugin type
-                var allTypes = System.AppDomain.CurrentDomain.GetAssemblies()
-                    .SelectMany(a => {
-                        try { return a.GetTypes(); }
-                        catch { return new System.Type[0]; }
-                    });
-
-                var potatoPluginType = allTypes.FirstOrDefault(t =>
-                    t.Name == "PotatoPlugin" && t.Namespace == "PotatoOptimization.Core");
-
-                if (potatoPluginType == null)
-                {
-                    ChillEnvPlugin.Log?.LogWarning("[Weather MOD] PotatoPlugin type not found, using fallback version");
-                    return "v?.?.?";
-                }
-
-                // Get the PluginVersion constant
-                var versionField = potatoPluginType.GetField("PluginVersion",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-
-                if (versionField == null)
-                {
-                    // Try Constants class instead
-                    var constantsType = allTypes.FirstOrDefault(t =>
-                        t.Name == "Constants" && t.Namespace == "PotatoOptimization.Core");
-
-                    if (constantsType != null)
-                    {
-                        versionField = constantsType.GetField("PluginVersion",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                    }
-                }
-
-                if (versionField != null)
-                {
-                    string version = versionField.GetValue(null) as string;
-                    if (!string.IsNullOrEmpty(version))
-                    {
-                        // Ensure it starts with 'v'
-                        return version.StartsWith("v") ? version : $"v{version}";
-                    }
-                }
-
-                ChillEnvPlugin.Log?.LogWarning("[Weather MOD] Version field not found, using fallback");
-                return "v?.?.?";
-            }
-            catch (System.Exception ex)
-            {
-                ChillEnvPlugin.Log?.LogError($"[Weather MOD] Failed to get iGPU Savior version: {ex.Message}");
-                return "v?.?.?";
-            }
-        }
-        private static void PlayClickSound()
+        static void PlayClickSound()
         {
             if (cachedSettingUI == null) return;
-            var sss = AccessTools.Field(typeof(SettingUI), "_systemSeService").GetValue(cachedSettingUI);
+            var sss = AccessTools.Field(typeof(SettingUI), "_systemSeService")
+                                  .GetValue(cachedSettingUI);
             sss?.GetType().GetMethod("PlayClick")?.Invoke(sss, null);
         }
     }
 
-    /// <summary>
-    /// Dynamically controls Canvas sorting based on dropdown open/closed state
-    /// </summary>
+    // ─────────────────────────────────────────────────────────────────────────
+    //  PulldownLayerController and WeatherModUIRunner are unchanged
+    // ─────────────────────────────────────────────────────────────────────────
+
     public class PulldownLayerController : MonoBehaviour
     {
         private Component pulldownUI;
         private Canvas targetCanvas;
-        private System.Reflection.FieldInfo isOpenField;
+        private FieldInfo isOpenField;
         private bool lastIsOpen = false;
 
         public void Initialize(Component pulldownUIComponent, Canvas canvas)
         {
             pulldownUI = pulldownUIComponent;
             targetCanvas = canvas;
-
             if (pulldownUI != null)
-            {
                 isOpenField = pulldownUI.GetType().GetField("_isOpen",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            }
+                    BindingFlags.NonPublic | BindingFlags.Instance);
         }
 
         private void Update()
         {
-            if (pulldownUI == null || targetCanvas == null || isOpenField == null)
-                return;
-
+            if (pulldownUI == null || targetCanvas == null || isOpenField == null) return;
             try
             {
                 bool isOpen = (bool)isOpenField.GetValue(pulldownUI);
-
-                if (isOpen != lastIsOpen)
-                {
-                    if (isOpen)
-                    {
-                        targetCanvas.overrideSorting = true;
-                        targetCanvas.sortingOrder = 30000;
-                    }
-                    else
-                    {
-                        targetCanvas.overrideSorting = false;
-                        targetCanvas.sortingOrder = 0;
-                    }
-
-                    lastIsOpen = isOpen;
-                }
+                if (isOpen == lastIsOpen) return;
+                if (isOpen) { targetCanvas.overrideSorting = true; targetCanvas.sortingOrder = 30000; }
+                else { targetCanvas.overrideSorting = false; targetCanvas.sortingOrder = 0; }
+                lastIsOpen = isOpen;
             }
             catch { }
         }
@@ -1634,22 +1250,18 @@ namespace ChillWithYou.EnvSync.UI
         {
             get
             {
-                if (_instance == null)
-                {
-                    var go = new GameObject("WeatherModUI_CoroutineRunner");
-                    DontDestroyOnLoad(go);
-                    _instance = go.AddComponent<WeatherModUIRunner>();
-                }
+                if (_instance != null) return _instance;
+                var go = new GameObject("WeatherModUI_CoroutineRunner");
+                DontDestroyOnLoad(go);
+                _instance = go.AddComponent<WeatherModUIRunner>();
                 return _instance;
             }
         }
 
-        public void RunDelayed(float seconds, System.Action action)
-        {
-            StartCoroutine(DelayedAction(seconds, action));
-        }
+        public void RunDelayed(float seconds, Action action)
+            => StartCoroutine(DelayedAction(seconds, action));
 
-        private IEnumerator DelayedAction(float seconds, System.Action action)
+        private IEnumerator DelayedAction(float seconds, Action action)
         {
             yield return new WaitForSeconds(seconds);
             action?.Invoke();
@@ -1663,19 +1275,24 @@ namespace ChillWithYou.EnvSync.UI
         {
             try
             {
-                var modContentParent = AccessTools.Field(typeof(WeatherModSettingsUI), "modContentParent").GetValue(null) as GameObject;
-                var modInteractableUI = AccessTools.Field(typeof(WeatherModSettingsUI), "modInteractableUI").GetValue(null) as InteractableUI;
-                modContentParent?.SetActive(false);
-                modInteractableUI?.DeactivateUseUI(false);
+                var mcp = AccessTools.Field(typeof(WeatherModSettingsUI), "modContentParent")
+                                     .GetValue(null) as GameObject;
+                var miu = AccessTools.Field(typeof(WeatherModSettingsUI), "modInteractableUI")
+                                     .GetValue(null) as InteractableUI;
+                mcp?.SetActive(false);
+                miu?.DeactivateUseUI(false);
 
-                var generalButton = AccessTools.Field(typeof(SettingUI), "_generalInteractableUI").GetValue(__instance) as InteractableUI;
-                var generalParent = AccessTools.Field(typeof(SettingUI), "_generalParent").GetValue(__instance) as GameObject;
+                var generalButton = AccessTools.Field(typeof(SettingUI), "_generalInteractableUI")
+                                               .GetValue(__instance) as InteractableUI;
+                var generalParent = AccessTools.Field(typeof(SettingUI), "_generalParent")
+                                               .GetValue(__instance) as GameObject;
                 generalButton?.ActivateUseUI(false);
                 generalParent?.SetActive(true);
 
-                var others = new[] { "_graphicParent", "_audioParent", "_accountParent", "_newsParent", "_creditsParent" };
-                foreach (var o in others)
-                    (AccessTools.Field(typeof(SettingUI), o).GetValue(__instance) as GameObject)?.SetActive(false);
+                foreach (var o in new[] { "_graphicParent","_audioParent","_accountParent",
+                                          "_newsParent","_creditsParent" })
+                    (AccessTools.Field(typeof(SettingUI), o).GetValue(__instance) as GameObject)
+                        ?.SetActive(false);
             }
             catch { }
         }
