@@ -564,29 +564,34 @@ namespace ChillWithYou.EnvSync.Core
             }
 
             EnvironmentType timeBase = GetTimeBasedEnvironment();
-
-            // Determine the single final base environment BEFORE applying anything
             EnvironmentType finalBase = timeBase;
+            EnvironmentType? scenery = null;
 
-            if (policy.CanControlWeather && weather != null
-                && policy.CanApplyCloudyOverride
-                && IsBadWeather(weather.Code)
-                && timeBase != EnvironmentType.Night)
+            if (policy.CanControlWeather && weather != null)
             {
-                finalBase = EnvironmentType.Cloudy;
+                scenery = GetSceneryType(weather.Code);
+
+                // Any precipitation (even light) makes daytime/sunset go Cloudy.
+                // Night is never overridden.
+                bool hasPrecipitation = scenery.HasValue;
+                bool isBad = IsBadWeather(weather.Code);
+
+                if (policy.CanApplyCloudyOverride && timeBase != EnvironmentType.Night)
+                {
+                    if (hasPrecipitation || isBad)
+                        finalBase = EnvironmentType.Cloudy;
+                }
             }
 
-            // Apply exactly once
             if (policy.CanControlTime || policy.CanControlWeather)
             {
                 ApplyBaseEnvironment(finalBase, force);
                 _lastAppliedEnv = finalBase;
             }
 
-            // Handle precipitation scenery separately (these are overlays, not base envs)
             if (policy.CanControlWeather && weather != null)
             {
-                ApplyScenery(GetSceneryType(weather.Code), force);
+                ApplyScenery(scenery, force);
             }
         }
 
@@ -647,19 +652,29 @@ namespace ChillWithYou.EnvSync.Core
 
         public static bool IsBadWeather(int code)
         {
-            if (code == 10 || code == 13 || code == 21 || code == 22) return false;
-            if (code == 4) return true;
-            if (code >= 7 && code <= 31) return true;
+            // Heavy rain / violent showers
+            if (code == 10 || code == 14 || code == 15) return true;
+            // Thunderstorms / thunderrain
+            if (code == 11 || code == 12 || (code >= 16 && code <= 18)) return true;
+            // Moderate-to-heavy snow / blizzard
+            if (code >= 23 && code <= 25) return true;
+            // Severe wind / sandstorm / haze
             if (code >= 34 && code <= 36) return true;
+            // Everything else (light rain 13, light snow 20-22, drizzle 19, fog 26-33, cloudy 4-9) = not "bad"
             return false;
         }
 
         private EnvironmentType? GetSceneryType(int code)
         {
+            // Snow: all snow types (light through blizzard)
             if (code >= 20 && code <= 25) return EnvironmentType.Snow;
+            // Thunderstorm / heavy thunderrain
             if (code == 11 || code == 12 || (code >= 16 && code <= 18)) return EnvironmentType.ThunderRain;
+            // Heavy rain / showers / downpour
             if (code == 10 || code == 14 || code == 15) return EnvironmentType.HeavyRain;
+            // Light rain / drizzle / freezing rain
             if (code == 13 || code == 19) return EnvironmentType.LightRain;
+            // Clear, cloudy, fog, wind → no precipitation overlay
             return null;
         }
 
