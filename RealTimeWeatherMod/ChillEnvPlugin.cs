@@ -14,7 +14,7 @@ namespace ChillWithYou.EnvSync
     {
         internal static ChillEnvPlugin Instance;
         internal static ManualLogSource Log;
-        public const string PluginVersion = "5.5.0";
+        public const string PluginVersion = "5.6.0";
         internal static UnlockItemService UnlockItemServiceInstance;
 
         internal static object WindowViewServiceInstance;
